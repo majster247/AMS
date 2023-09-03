@@ -11,16 +11,16 @@ void createTUI_windowFullscreen(const int height, const int width) {
         terminal_writestring("Invalid window dimensions.\n");
         return;
     }
-
-    for (int j = 0; j < height; j++) {
-        for (int i = 0; i < width; i++) {
+    terminal_writestring("\n\n");
+    for (int j = 2; j < height; j++) {
+        for (int i = 2; i < width; i++) {
             if(((j==height-1) && (i==width-1))){printf("%c", ((char)219));terminal_writestring("\n");}else{
-                if(((j == 0) && (i==0))){printf("%c", ((char)219));}else{   
-                    if(((j == 0) && (i==width-1))){printf("%c", ((char)219));terminal_writestring("\n");}else{ 
-                        if (j == 0) {printf("%c", ((char)223));} else {   
-                            if(((j==height-1) && (i==0))){printf("%c", ((char)219));}else{    
+                if(((j == 2) && (i==2))){printf("  %c", ((char)219));}else{   
+                    if(((j == 2) && (i==width-1))){printf("%c", ((char)219));terminal_writestring("\n");}else{ 
+                        if (j == 2) {printf("%c", ((char)223));} else {   
+                            if(((j==height-1) && (i==2))){printf("  %c", ((char)219));}else{    
                                 if(j == height-1){printf("%c", ((char)220));}else{
-                                    if (i == 0) {printf("%c", ((char)221));} else {
+                                    if (i == 2) {printf("  %c", ((char)221));} else {
                                         if((i == width-1)){printf("%c", ((char)222));terminal_writestring("\n");}else{
                                             terminal_writestring(" ");
                                         }
@@ -39,13 +39,36 @@ void createTUI_windowFullscreen(const int height, const int width) {
 
 void kernel_main(void) {
 	terminal_initialize();
-	createTUI_windowFullscreen(24,79);
+	createTUI_windowFullscreen(23,78);
     //terminal_writestring("Hello\n");
     //terminal_writestring("AMS-OS!\n\n\n");
     char info[] = "AMS-OS v0.1      developed by Hubert Topolski";
-    for(int z=1;z<=(strlen(info));z++){
-        terminal_putentryat(info[z-1], TerminalColor(), z, 1);
+    char start[]="Run programs";
+    char Terminal[]="Terminal";
+    char About[]="About OS";
+    
+    for(int z=4;z<=(strlen(info)+4);z++){
+        terminal_putentryat(info[z-4], TerminalColor(), z, 3);
+    }
+
+    for(int x=4;x<=(strlen(start)+4);x++){
+        terminal_putentryat(start[x-4], vga_entry_color(0, 15), x, 6);
     }
     
+    for(int y=4;y<=(strlen(Terminal)+4);y++){
+        terminal_putentryat(Terminal[y-4], vga_entry_color(0, 7), y, 8);
+    }
+
+    for(int t=4;t<=(strlen(About)+4);t++){
+        terminal_putentryat(About[t-4], vga_entry_color(0, 7), t, 10);
+    }
+
+
     
+
+
+
+    while(1!=0){
+
+    }
 }
