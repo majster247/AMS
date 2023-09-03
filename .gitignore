@@ -1,1 +1,3 @@
-/ENV
+*.iso
+isodir
+sysroot
