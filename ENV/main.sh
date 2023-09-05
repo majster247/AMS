@@ -56,7 +56,24 @@ if [[ "$machine" == Mac ]]; then
     tar -xf binutils-2.41.tar.gz
 
     cd build-binutils
-
-
 fi
 
+if [[ "$machine" == Linux ]]; then
+    #Downloading sources
+    echo "Downloading Binutils"
+    wget https://ftp.gnu.org/gnu/binutils/binutils-2.41.tar.gz
+
+    echo "Downloading GCC"
+    wget https://ftp.gnu.org/gnu/gcc/gcc-13.2.0/gcc-13.2.0.tar.gz
+
+    echo "Machine kernel detected is: "$machine {unameOut}
+    echo "Initializing building a ENV to compile system"
+    
+    mkdir build-binutils
+    mkdir build-gcc
+
+    tar -xf gcc-13.2.0.tar.gz
+    tar -xf binutils-2.41.tar.gz
+
+    cd build-binutils
+fi
