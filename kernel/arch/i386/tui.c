@@ -50,58 +50,58 @@ void createTUI_windowFullscreen(const int height, const int width) {
     char Terminal[]="Terminal";
     char About[]="About OS";
     
-    for(int z=4;z<=(strlen(info)+4);z++){
+    for(int z=4;z<=((int)strlen(info)+4);z++){
         terminal_putentryat(info[z-4], TerminalColor(), z, 3);
     }
 
     switch (checked)
     {
     case 0:{
-        for(int x=4;x<=(strlen(start)+4);x++){
+        for(int x=4;x<=((int)strlen(start)+4);x++){
             terminal_putentryat(start[x-4], vga_entry_color(0, 15), x, 6);
         }
     
-        for(int y=4;y<=(strlen(Terminal)+4);y++){
+        for(int y=4;y<=((int)strlen(Terminal)+4);y++){
             terminal_putentryat(Terminal[y-4], vga_entry_color(0, 7), y, 8);
         }
 
-        for(int t=4;t<=(strlen(About)+4);t++){
+        for(int t=4;t<=((int)strlen(About)+4);t++){
             terminal_putentryat(About[t-4], vga_entry_color(0, 7), t, 10);
         }}
     case 1:{
-        for(int x=4;x<=(strlen(start)+4);x++){
+        for(int x=4;x<=((int)strlen(start)+4);x++){
             terminal_putentryat(start[x-4], vga_entry_color(0, 7), x, 6);
         }
     
-        for(int y=4;y<=(strlen(Terminal)+4);y++){
+        for(int y=4;y<=((int)strlen(Terminal)+4);y++){
             terminal_putentryat(Terminal[y-4], vga_entry_color(0, 15), y, 8);
         }
 
-        for(int t=4;t<=(strlen(About)+4);t++){
+        for(int t=4;t<=((int)strlen(About)+4);t++){
             terminal_putentryat(About[t-4], vga_entry_color(0, 7), t, 10);
     }}
     case 2:{
-        for(int x=4;x<=(strlen(start)+4);x++){
+        for(int x=4;x<=((int)strlen(start)+4);x++){
             terminal_putentryat(start[x-4], vga_entry_color(0, 7), x, 6);
         }
     
-        for(int y=4;y<=(strlen(Terminal)+4);y++){
+        for(int y=4;y<=((int)strlen(Terminal)+4);y++){
             terminal_putentryat(Terminal[y-4], vga_entry_color(0, 7), y, 8);
         }
 
-        for(int t=4;t<=(strlen(About)+4);t++){
+        for(int t=4;t<=((int)strlen(About)+4);t++){
             terminal_putentryat(About[t-4], vga_entry_color(0, 15), t, 10);
         }}
     default:{
-        for(int x=4;x<=(strlen(start)+4);x++){
+        for(int x=4;x<=((int)strlen(start)+4);x++){
             terminal_putentryat(start[x-4], vga_entry_color(0, 15), x, 6);
         }
     
-        for(int y=4;y<=(strlen(Terminal)+4);y++){
+        for(int y=4;y<=((int)strlen(Terminal)+4);y++){
             terminal_putentryat(Terminal[y-4], vga_entry_color(0, 7), y, 8);
         }
 
-        for(int t=4;t<=(strlen(About)+4);t++){
+        for(int t=4;t<=((int)strlen(About)+4);t++){
             terminal_putentryat(About[t-4], vga_entry_color(0, 7), t, 10);
         }}
     }

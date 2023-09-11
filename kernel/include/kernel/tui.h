@@ -5,7 +5,7 @@
 #include <kernel/tty.h>
 #include <stdint.h>
 
-void createTUI_window(const int height, const int width);
+void createTUI_windowFullscreen(const int height, const int width);
 
 //VGA FOR TUI
 enum vga_color {
