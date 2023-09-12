@@ -69,7 +69,54 @@ void terminal_writestring(const char* data) {
     terminal_write(data, strlen(data));
 }
 
+// Function to print a string at a specific row and column
+void terminal_writestringat(const char* data, size_t row, size_t column) {
+    // Check if the row and column are within bounds
+    if (row >= VGA_HEIGHT || column >= VGA_WIDTH) {
+        // Handle out-of-bounds row or column
+        return;
+    }
 
+    // Save the current cursor position
+    size_t original_row = terminal_row;
+    size_t original_column = terminal_column;
+
+    // Set the cursor position to the desired row and column
+    terminal_row = row;
+    terminal_column = column;
+
+    // Write the string at the specified row and column
+    terminal_writestring(data);
+
+    // Restore the original cursor position
+    terminal_row = original_row;
+    terminal_column = original_column;
+}
+
+
+
+void terminal_writestringatrow(const char* data, size_t row) {
+    // Check if the row is within bounds
+    if (row >= VGA_HEIGHT) {
+        // Handle out-of-bounds row
+        return;
+    }
+
+    // Save the current cursor position
+    size_t original_row = terminal_row;
+    size_t original_column = terminal_column;
+
+    // Set the cursor position to the desired row
+    terminal_row = row;
+    terminal_column = 0;
+
+    // Write the string at the specified row
+    terminal_writestring(data);
+
+    // Restore the original cursor position
+    terminal_row = original_row;
+    terminal_column = original_column;
+}
 
 
 //Conversions

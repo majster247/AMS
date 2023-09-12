@@ -14,7 +14,7 @@ static const size_t VGA_HEIGHT = 25;
 
 int checked=0;
 
-void createTUI_windowFullscreen(const int height, const int width) {
+void createTUI_Start(const int height, const int width) {
     if (height <= 0 || width <= 0 || height > 25 || width > 80) {
         terminal_writestring("Invalid window dimensions.\n");
         return;
@@ -114,3 +114,31 @@ void createTUI_windowFullscreen(const int height, const int width) {
 
 
 
+void createTUI_windowFullscreen(const int height, const int width) {
+    if (height <= 0 || width <= 0 || height > 25 || width > 80) {
+        terminal_writestring("Invalid window dimensions.\n");
+        return;
+    }
+    terminal_writestring("\n\n");
+    for (int j = 2; j < height; j++) {
+        for (int i = 2; i < width; i++) {
+            if(((j==height-1) && (i==width-1))){printf("%c", ((char)219));terminal_writestring("\n");}else{
+                if(((j == 2) && (i==2))){printf("  %c", ((char)219));}else{   
+                    if(((j == 2) && (i==width-1))){printf("%c", ((char)219));terminal_writestring("\n");}else{ 
+                        if (j == 2) {printf("%c", ((char)223));} else {   
+                            if(((j==height-1) && (i==2))){printf("  %c", ((char)219));}else{    
+                                if(j == height-1){printf("%c", ((char)220));}else{
+                                    if (i == 2) {printf("  %c", ((char)221));} else {
+                                        if((i == width-1)){printf("%c", ((char)222));terminal_writestring("\n");}else{
+                                            terminal_writestring(" ");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

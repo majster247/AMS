@@ -3,5 +3,6 @@
         "stdbool.h": "c",
         "tui.h": "c"
     },
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "discord.enabled": true
 }

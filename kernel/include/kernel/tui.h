@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 void createTUI_windowFullscreen(const int height, const int width);
+void createTUI_Start(const int height, const int width);
 
 //VGA FOR TUI
 enum vga_color {
