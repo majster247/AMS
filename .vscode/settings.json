@@ -2,5 +2,7 @@
     "files.associations": {
         "stdbool.h": "c",
         "tui.h": "c"
-    }
+    },
+    "git.ignoreLimitWarning": true,
+    "discord.enabled": true
 }
