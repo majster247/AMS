@@ -1,6 +1,8 @@
 
 #include "keyboard.h"
+// future vga.cpp with terminal printing functions
 
+void printf(char*);
 KeyboardDriver::KeyboardDriver(InterruptManager* manager)
 : InterruptHandler(manager, 0x21),
 dataport(0x60),
@@ -20,7 +22,7 @@ KeyboardDriver::~KeyboardDriver()
 {
 }
 
-void printf(char*);
+
 
 uint32_t KeyboardDriver::HandleInterrupt(uint32_t esp)
 {
@@ -45,7 +47,7 @@ uint32_t KeyboardDriver::HandleInterrupt(uint32_t esp)
             case 0x12: printf("e"); break;
             case 0x13: printf("r"); break;
             case 0x14: printf("t"); break;
-            case 0x15: printf("z"); break;
+            case 0x15: printf("y"); break;
             case 0x16: printf("u"); break;
             case 0x17: printf("i"); break;
             case 0x18: printf("o"); break;
@@ -61,7 +63,7 @@ uint32_t KeyboardDriver::HandleInterrupt(uint32_t esp)
             case 0x25: printf("k"); break;
             case 0x26: printf("l"); break;
 
-            case 0x2C: printf("y"); break;
+            case 0x2C: printf("z"); break;
             case 0x2D: printf("x"); break;
             case 0x2E: printf("c"); break;
             case 0x2F: printf("v"); break;
@@ -74,6 +76,7 @@ uint32_t KeyboardDriver::HandleInterrupt(uint32_t esp)
 
             case 0x1C: printf("\n"); break;
             case 0x39: printf(" "); break;
+            case 0x0E: printf("\n");break;
 
             default:
             {
@@ -88,3 +91,7 @@ uint32_t KeyboardDriver::HandleInterrupt(uint32_t esp)
     }
     return esp;
 }
+
+
+
+
