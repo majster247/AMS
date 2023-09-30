@@ -92,7 +92,7 @@ namespace myos
                 Port32Bit(myos::common::uint16_t portnumber);
                 ~Port32Bit();
 
-                virtual myos::common::uint32_t Read();
+                virtual myos::common::uint32_t Read(); 
                 virtual void Write(myos::common::uint32_t data);
 
             protected:
