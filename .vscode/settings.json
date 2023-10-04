@@ -4,5 +4,6 @@
         "tui.h": "c"
     },
     "git.ignoreLimitWarning": true,
-    "discord.enabled": true
+    "discord.enabled": true,
+    "C_Cpp.errorSquiggles": "disabled"
 }
