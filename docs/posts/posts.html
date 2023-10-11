@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMS-OS posts</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #e6b507;
+            color: black;
+            margin: 5px;
+            margin-left: 5%;
+            margin-right: 5%;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh; /* Ensure the body takes at least the full viewport height */
+        }
+
+        header {
+            background-color: blue;
+            padding: 10px;
+            text-align: center;
+            border-style: solid;
+            border-color: yellow;
+        }
+
+        header h1 {
+            font-size: 20px;
+        }
+
+        nav {
+            text-align: center;
+            padding: 10px;
+        }
+
+        nav a {
+            color: black;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+
+        nav a:hover {
+            text-decoration: underline;
+        }
+
+        main {
+            flex: 1; /* Fill remaining space in the viewport */
+            padding: 20px;
+        }
+
+        footer {
+            background-color: blue;
+            padding: 10px;
+            text-align: center;
+        }
+        img{
+            height: 50%;
+            width: 50%;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Welcome to AMS-OS</h1>
+    </header>
+
+    <nav>
+        <a href="../index.html">Home</a>
+        <a href="../posts/posts.html">Posts</a>
+        <a href="#">Download</a>
+        <a href="#">Documentation</a>
+        <a href="#">Contact</a>
+    </nav>
+
+    <main>
+        <h2>Latest Posts</h2>
+        <ul id="post-list">
+            <!-- Posts will be added here using JavaScript -->
+        </ul>
+        <div id="post-content">
+            <!-- Post content will be displayed here when "Read More" is clicked -->
+        </div>
+    </main>
+
+    <footer>
+        &copy; 2023 AMS-OS
+    </footer>
+
+    <script>
+        // Sample array of posts (You can replace this with your data)
+        const posts = [
+            {
+                id: 1,
+                label: 'AMS-OS v0.6 - making a masterpiece from shit',
+                content: 'Today I posted a v0.6 version of AMS-OS, Im fucking dont know how to organize that shit.<br><br>\
+                Im not a GCC lover, some of syntax is strage like memory managment. OFC Python is trash but memory organization over a unstable kernel is like fishing in storm.<br>\
+                Well I started writing a own kernel with real-time code execution of ASM code in 16/32/64 bit. That provides me to better write a OS in smaller amount of time and port it just with one command to EVERY PC.<br>I think that will be quiet hard task so I wil port it to Linux, u can then download a compiler and AMS distribution an compile it on your own<br><br>\
+                (Note: ARM is not a PC, its trash designed by Linus cock suckers and CIA to slave people in a cage. If you think thats bullshit, answear the question - Why Android and iOS are Unix based (iOS is configured BSD shit). \
+                I will write a post about niggers from CIA and "people" who designed an Android and iOS Unix based cum. Aufwiedersehen',
+                date: '2023-10-11',
+                image: 'content/image1.png'
+            },
+            {
+                id: 2,
+                label: 'ANDROID vs iOS - How Linus & CIA traped all world into intelectual cage',
+                content: 'I writed in post before that i will fucking write about it niggers',
+                date: '2023-10-12',
+                image: 'path/to/your/image2.jpg'
+            },
+            // Add more posts here
+        ];
+
+        let currentPostIndex = null;
+
+        // Function to display the latest posts
+        function displayLatestPosts() {
+            const postList = document.getElementById('post-list');
+            postList.innerHTML = '';
+
+            // Sort posts by date (newest to oldest)
+            posts.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            // Display all posts
+            posts.forEach((post, index) => {
+                const li = document.createElement('li');
+                const readMoreLink = document.createElement('a');
+                readMoreLink.href = '#';
+                readMoreLink.textContent = 'Read More';
+                readMoreLink.addEventListener('click', () => displayPostContent(index));
+                li.innerHTML = `${post.date}: ${post.label}         `;
+                li.appendChild(readMoreLink);
+                postList.appendChild(li);
+            });
+        }
+
+        // Function to display the full content of a post
+        function displayPostContent(index) {
+            currentPostIndex = index;
+            const postContent = document.getElementById('post-content');
+            const post = posts[index];
+            postContent.innerHTML = `
+                <h1>${post.label}</h1>
+                <p>${post.date}</p><br><br><p>${post.content}</p>
+                <img src="${post.image}" alt="Sugoma ${post.id}" /><br><br>
+                <button onclick="displayPreviousPost()">Previous Post</button>
+                <button onclick="displayNextPost()">Next Post</button>
+            `;
+        }
+
+        // Function to display the previous post
+        function displayPreviousPost() {
+            if (currentPostIndex > 0) {
+                currentPostIndex--;
+                displayPostContent(currentPostIndex);
+            }
+        }
+
+        // Function to display the next post
+        function displayNextPost() {
+            if (currentPostIndex < posts.length - 1) {
+                currentPostIndex++;
+                displayPostContent(currentPostIndex);
+            }
+        }
+
+        // Call the function to display posts when the page loads
+        displayLatestPosts();
+    </script>
+</body>
+</html>
