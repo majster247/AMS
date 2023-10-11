@@ -15,10 +15,10 @@
 #include <multitasking.h>
 
 #include <drivers/amd_am79c973.h>
-#include <drivers/filesystem.h>
+//#include <drivers/filesystem.h>
 
 
-// #define GRAPHICSMODE
+//#define GRAPHICSMODE
 
 
 using namespace myos;
@@ -257,12 +257,10 @@ extern "C" void kernelMain(const void* multiboot_structure, uint32_t /*multiboot
 
 
     
-    printf("\nS-ATA primary master: ");
-    AdvancedTechnologyAttachment ata0m(true, 0x1F0);
-    ata0m.Identify();
-    ata0m.Flush();
-
-    Filesystem::Initialize();
+    //printf("\nS-ATA primary master: ");
+    //AdvancedTechnologyAttachment ata0m(true, 0x1F0);
+    //ata0m.Identify();
+    /*Filesystem::Initialize();
     if(Filesystem::CreateFile("exmple.txt")){
         int fileHandle = Filesystem::OpenFile("exmple.txt");
         if(fileHandle >= 0){
@@ -272,7 +270,7 @@ extern "C" void kernelMain(const void* multiboot_structure, uint32_t /*multiboot
         Filesystem::ListFiles();
     }
 
-    Filesystem::Uninitialize();
+    Filesystem::Uninitialize();*/
 
 
     /*printf("\nS-ATA primary slave: ");
@@ -297,11 +295,12 @@ extern "C" void kernelMain(const void* multiboot_structure, uint32_t /*multiboot
 
     interrupts.Activate();
 
-
     while(1)
     {
         #ifdef GRAPHICSMODE
             desktop.Draw(&vga);
         #endif
     }
+    
+
 }
