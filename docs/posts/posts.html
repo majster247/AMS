@@ -96,20 +96,63 @@
                 label: 'AMS-OS v0.6 - making a masterpiece from shit',
                 content: 'Today I posted a v0.6 version of AMS-OS, Im fucking dont know how to organize that shit.<br><br>\
                 Im not a GCC lover, some of syntax is strage like memory managment. OFC Python is trash but memory organization over a unstable kernel is like fishing in storm.<br>\
-                Well I started writing a own kernel with real-time code execution of ASM code in 16/32/64 bit. That provides me to better write a OS in smaller amount of time and port it just with one command to EVERY PC.<br>I think that will be quiet hard task so I wil port it to Linux, u can then download a compiler and AMS distribution an compile it on your own<br><br>\
+                Well I started writing a own compilator with real-time code execution of ASM code in 16/32/64 bit. That provides me to better write a OS in smaller amount of time and port it just with one command to EVERY PC.<br>I think that will be quiet hard task so I wil port it to Linux, u can then download a compiler and AMS distribution an compile it on your own<br><br>\
                 (Note: ARM is not a PC, its trash designed by Linus cock suckers and CIA to slave people in a cage. If you think thats bullshit, answear the question - Why Android and iOS are Unix based (iOS is configured BSD shit). \
                 I will write a post about niggers from CIA and "people" who designed an Android and iOS Unix based cum. Aufwiedersehen',
                 date: '2023-10-11',
-                image: 'content/image1.png'
+                media: [
+                    {
+                        type: 'image',
+                        src:'content/image1.png',
+                        alt: 'I hate niggers'
+                    }
+                ]
             },
             {
                 id: 2,
                 label: 'ANDROID vs iOS - How Linus & CIA traped all world into intelectual cage',
                 content: 'I writed in post before that i will fucking write about it niggers',
                 date: '2023-10-12',
-                image: 'path/to/your/image2.jpg'
+                media: []
             },
-            // Add more posts here
+            {
+                id: 3,
+                label: 'AMS-OS vs VESA - Devblog 0x01',
+                content: 'Devblog 0x01, Im not sure what "professional devs" and all shits like simp-harvesting sluts from IG/OF/Tiktok write and say so Im gonna post here a AMS-OS shits from my head<br><br>\
+                As you can know, ASM-OS has a VGA experimental driver to draw a screen and draw desktop (who fucking named it desktop, desktop on desktop wtf). But yeah AMS-OS CAN handle a 8K resolution probably over 60.00Hz (I have tested it only on 8K 30.00Hz so i dont fucking know).<br>\
+                The problem with AMS-OS driver is that - they work and look like shit, really im not that type of programmer who edit a 0.0001 value to make a frontend a "working masterpiece". Fuck off CIA and r/linuxporn, I will not give you my dotfiles on arch and Ubuntu.<br>\
+                So making a flex driver is really hard, when you working on it from 1996 when VESA started doing CIA standars over trash cans and only code graphics on your cool standarized and nigger watched machine its simple\
+                But working on it now in 2023, when you have more interesting types like HDMI and DP (im not a huge fan of high-end tech, simple but stable VGA is good) is teribble. Calculations over MISC, clock with http://tinyvga.com/vga-timing and compile&check 2137 times is like talking that OF is not a e-sex<br>\
+                Well AMS-OS has now implemented one or two types, 320x200 and 640x480 both in 256 bit color, i wanted implement a resolution like standard 1280x1024 or 1024x600 using my old but good laptop but somehow working on it is a long way.<br><br>\
+                So after many tech problems over registers, sending and calculating various hex values im started thinking about making a VGA only textmoded and not switching to GUI now.<br>\
+                Im not sure that GUI may be as much needed now, filesystem "ShadowWizard", terminal, package manager and some editor with compilator to make it on working system may be more effective that making a GUI and thiking about stuff like this now. AMS-OS need to be complex, simple and not as much modern like systems now.\
+                <br><br><br>Also I have two words to people who think that AMS-OS is another Linus-shit or modern self-programmed OS writed by complex squads using nigger GCC. My words are:<br>\
+                            I fucking hate your standards, fuck GCC and all niggers who use it, im a white man i fucking writing my own compiler like real professional, the difference between amateur and professional is that you will write and use own compilator.<br><br>\
+                So thats my devblog 0x01 now, im not sure that devblogs are that type writed, i think thats must be real-writed so fuck all professional programmers, cock suckers CIA niggers.\
+                Some photos of  work, if you have any questions i answear via e-mail in contact section. ',
+                date: '2023-10-14',
+                media: [
+                    {
+                        type: 'image',
+                        src:"content/media2/image2_2.jpg",
+                        alt:"Image"
+                    },
+                    {
+
+                        type: 'image',
+                        src:"content/media2/image2_1.jpg",
+                        alt:"Image"
+                    },
+                    {
+
+                        type: 'gif',
+                        src:"content/media2/gif2.gif",
+                        alt:"Gif"
+                    }
+
+            ]
+            }
+            
         ];
 
         let currentPostIndex = null;
@@ -140,10 +183,24 @@
             currentPostIndex = index;
             const postContent = document.getElementById('post-content');
             const post = posts[index];
+            const mediaContent = post.media.map(mediaItem => {
+                if (mediaItem.type === 'image') {
+                    return `<img src="${mediaItem.src}" alt="${mediaItem.alt}" /><br>`;
+                } else if (mediaItem.type === 'gif') {
+                    return `<img src="${mediaItem.src}" alt="${mediaItem.alt}" /><br>`;
+                } else if (mediaItem.type === 'video') {
+                    return `<video controls>
+                        <source src="${mediaItem.src}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video><br>`;
+                }
+            });
+        
             postContent.innerHTML = `
                 <h1>${post.label}</h1>
-                <p>${post.date}</p><br><br><p>${post.content}</p>
-                <img src="${post.image}" alt="Sugoma ${post.id}" /><br><br>
+                <p>${post.date}</p><br><br>
+                <p>${post.content}</p>
+                ${mediaContent.join('')}
                 <button onclick="displayPreviousPost()">Previous Post</button>
                 <button onclick="displayNextPost()">Next Post</button>
             `;
