@@ -24,10 +24,10 @@ objects = obj/loader.o \
           obj/gui/widget.o \
           obj/gui/window.o \
           obj/gui/desktop.o \
+		  obj/programs/terminal.o \
 		  obj/kernel.o
 #obj/drivers/filesystem.o \
-		  
-#obj/programs/terminal.o \
+#obj/common/gdt.o \
 #obj/programs/korwin.o \
           
 

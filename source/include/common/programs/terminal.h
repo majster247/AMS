@@ -5,12 +5,10 @@ namespace myos{
     namespace common{
         namespace programs{
 
-            class Terminal{
-                public:
-                    static char* command[100];
-
-                    Terminal();
-                    ~Terminal();
+            namespace Terminal{
+                static char command[100];
+                void Initialize();
+                void HandleCommand(char* command);
                  
             };
         }
