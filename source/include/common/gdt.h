@@ -1,5 +1,5 @@
-#ifndef __OS__GDT_H
-#define __OS__GDT_H
+#ifndef __MYOS__GDT_H
+#define __MYOS__GDT_H
 
 #include <types.h>
 

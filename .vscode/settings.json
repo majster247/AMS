@@ -1,7 +1,8 @@
 {
     "files.associations": {
         "stdbool.h": "c",
-        "tui.h": "c"
+        "tui.h": "c",
+        "compare": "cpp"
     },
     "git.ignoreLimitWarning": true,
     "discord.enabled": true,

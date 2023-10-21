@@ -13,10 +13,10 @@
 #include <gui/desktop.h>
 #include <gui/window.h>
 #include <multitasking.h>
-#include <cstring>
 #include <drivers/amd_am79c973.h>
 //#include <drivers/filesystem.h>
 #include <common/programs/terminal.h>
+#include <common/universalfunc.h>
 
 //#define GRAPHICSMODE
 
@@ -98,7 +98,7 @@ public:
     {
         char* foo = " ";
         if(c=='\n'){programs::Terminal::HandleCommand(programs::Terminal::command);}
-        else{strncat(programs::Terminal::command, &c, 1);}
+        else{ char* command = programs::Terminal::command;while(*command != '\0'){command++;};*command = c;}
         foo[0] = c;
         printf(foo);
     }
@@ -293,9 +293,9 @@ extern "C" void kernelMain(const void* multiboot_structure, uint32_t /*multiboot
     //amd_am79c973* eth0 = (amd_am79c973*)(drvManager.drivers[2]);
     //eth0->Send((uint8_t*)"Hello Network", 13);
 
-    myos::common::programs::Terminal::Initialize();
+    
     interrupts.Activate();
-
+    myos::common::programs::Terminal::Initialize();
 
     while(1)
     {
