@@ -2,7 +2,14 @@
     "files.associations": {
         "stdbool.h": "c",
         "tui.h": "c",
-        "compare": "cpp"
+        "compare": "cpp",
+        "algorithm": "cpp",
+        "system_error": "cpp",
+        "array": "cpp",
+        "functional": "cpp",
+        "tuple": "cpp",
+        "type_traits": "cpp",
+        "utility": "cpp"
     },
     "git.ignoreLimitWarning": true,
     "discord.enabled": true,

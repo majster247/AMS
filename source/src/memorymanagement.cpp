@@ -126,3 +126,13 @@ void operator delete[](void* ptr)
     if(myos::MemoryManager::activeMemoryManager != 0)
         myos::MemoryManager::activeMemoryManager->free(ptr);
 }
+void* memset(void* dest, int value, myos::common::size_t count) {
+    unsigned char* dest_ptr = static_cast<unsigned char*>(dest);
+    unsigned char byte_value = static_cast<unsigned char>(value);
+
+    for (size_t i = 0; i < count; i++) {
+        dest_ptr[i] = byte_value;
+    }
+
+    return dest;
+}

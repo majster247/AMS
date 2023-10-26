@@ -14,7 +14,7 @@
 #include <gui/window.h>
 #include <multitasking.h>
 #include <drivers/amd_am79c973.h>
-//#include <drivers/filesystem.h>
+#include <filesystem/shadowwizard.h>
 #include <common/programs/terminal.h>
 #include <common/universalfunc.h>
 
@@ -28,42 +28,91 @@ using namespace myos::hardwarecommunication;
 using namespace myos::gui;
 
 
+void printf(char* str) {
+	
+	static uint8_t x = 0, y = 0;
+	static bool cliCursor = false;
 
-void printf(char* str)
-{
-    static uint16_t* VideoMemory = (uint16_t*)0xb8000;
+	//default gray on black text
+	uint16_t attrib = 0x07;
 
-    static uint8_t x=0,y=0;
+	volatile uint16_t* vidmem;
 
-    for(int i = 0; str[i] != '\0'; ++i)
-    {
-        switch(str[i])
-        {
-            case '\n':
-                x = 0;
-                y++;
-                break;
-            default:
-                VideoMemory[80*y+x] = (VideoMemory[80*y+x] & 0xFF00) | str[i];
-                x++;
-                break;
-        }
+		
+	for (int i = 0; str[i] != '\0'; i++) {
+		
+		vidmem = (volatile uint16_t*)0xb8000 + (80*y+x);
+		
+		switch (str[i]) {
+		
+			case '\b':
+				vidmem = (volatile uint16_t*)0xb8000 + (80*y+x);
+				*vidmem = ' ' | (attrib << 8);
+				vidmem--; *vidmem = '_' | (attrib << 8);
+				x--;
 
-        if(x >= 80)
-        {
-            x = 0;
-            y++;
-        }
+				break;
 
-        if(y >= 25)
-        {
-            for(y = 0; y < 25; y++)
-                for(x = 0; x < 80; x++)
-                    VideoMemory[80*y+x] = (VideoMemory[80*y+x] & 0xFF00) | ' ';
-            x = 0;
-            y = 0;
-        }
-    }
+			case '\n':
+				*vidmem = ' ' | (attrib << 8);
+				y++;
+				x = 0;
+					
+				break;
+			case '\v': //clear screen
+				
+				for (y = 0; y < 25; y++) {
+					for (x = 0; x < 80; x++) {
+					
+						vidmem = (volatile uint16_t*)0xb8000 + (80*y+x);
+						*vidmem = 0x00;
+					}
+				}
+				x = 0;
+				y = 0;
+					
+				break;
+
+				
+			default:
+				*vidmem = str[i] | (attrib << 8);
+				x++;
+					
+				break;
+		}
+	
+		if (x >= 80) {
+		
+			y++;
+			x = 0;
+		}
+
+		
+		//scrolling	
+		if (y >= 25) {
+			
+			uint16_t scroll_temp;
+
+			for (y = 1; y < 25; y++) {	
+				for (x = 0; x < 80; x++) {
+					
+					vidmem = (volatile uint16_t*)0xb8000 + (80*y+x);
+					scroll_temp = *vidmem;
+						
+					vidmem -= 80;
+					*vidmem = scroll_temp;
+					
+					if (y == 24) {
+						
+						vidmem = (volatile uint16_t*)0xb8000 + (1920+x);
+						*vidmem = ' ' | (attrib << 8);
+					}
+				}
+			}
+			x = 0;
+			y = 24;
+		}
+	}
 }
 
 void printfHex(uint8_t key)
@@ -91,18 +140,7 @@ void printfHex32(uint32_t key)
 
 
 
-class PrintfKeyboardEventHandler : public KeyboardEventHandler
-{
-public:
-    void OnKeyDown(char c)
-    {
-        char* foo = " ";
-        if(c=='\n'){programs::Terminal::HandleCommand(programs::Terminal::command);}
-        else{ char* command = programs::Terminal::command;while(*command != '\0'){command++;};*command = c;}
-        foo[0] = c;
-        printf(foo);
-    }
-};
+
 
 class MouseToConsole : public MouseEventHandler
 {
@@ -221,7 +259,7 @@ extern "C" void kernelMain(const void* multiboot_structure, uint32_t /*multiboot
         #ifdef GRAPHICSMODE
             KeyboardDriver keyboard(&interrupts, &desktop);
         #else
-            PrintfKeyboardEventHandler kbhandler;
+            myos::drivers::PrintfKeyboardEventHandler kbhandler;
             KeyboardDriver keyboard(&interrupts, &kbhandler);
         #endif
         drvManager.AddDriver(&keyboard);

@@ -1,22 +1,16 @@
 
 #include <drivers/keyboard.h>
-
+#include <common/programs/terminal.h>
+#include <memorymanagement.h>
 using namespace myos::common;
 using namespace myos::drivers;
 using namespace myos::hardwarecommunication;
+void printf(char* str);
 
+KeyboardEventHandler::KeyboardEventHandler(){}
+void KeyboardEventHandler::OnKeyDown(char){}
+void KeyboardEventHandler::OnKeyUp(){}
 
-KeyboardEventHandler::KeyboardEventHandler()
-{
-}
-
-void KeyboardEventHandler::OnKeyDown(char)
-{
-}
-
-void KeyboardEventHandler::OnKeyUp(char)
-{
-}
 
 
 
@@ -49,70 +43,123 @@ void KeyboardDriver::Activate()
     dataport.Write(0xf4);
 }
 
-uint32_t KeyboardDriver::HandleInterrupt(uint32_t esp)
-{
+uint32_t KeyboardDriver::HandleInterrupt(uint32_t esp){
     uint8_t key = dataport.Read();
+    if(handler==0){return esp;}
+    switch (key) {
+	    case 0x29:if (handler->shift) { handler->OnKeyDown('~'); } else { handler->OnKeyDown('`'); }break;
+	    case 0x02:if (handler->shift) { handler->OnKeyDown('!'); } else { handler->OnKeyDown('1'); }break;
+	    case 0x03:if (handler->shift) { handler->OnKeyDown('@'); } else { handler->OnKeyDown('2'); }break;
+	    case 0x04:if (handler->shift) { handler->OnKeyDown('#'); } else { handler->OnKeyDown('3'); }break;
+	    case 0x05:if (handler->shift) { handler->OnKeyDown('$'); } else { handler->OnKeyDown('4'); }break;
+	    case 0x06:if (handler->shift) { handler->OnKeyDown('%'); } else { handler->OnKeyDown('5'); }break;
+	    case 0x07:if (handler->shift) { handler->OnKeyDown('^'); } else { handler->OnKeyDown('6'); }break;
+	    case 0x08:if (handler->shift) { handler->OnKeyDown('&'); } else { handler->OnKeyDown('7'); }break;
+	    case 0x09:if (handler->shift) { handler->OnKeyDown('*'); } else { handler->OnKeyDown('8'); }break;
+	    case 0x0a:if (handler->shift) { handler->OnKeyDown('('); } else { handler->OnKeyDown('9'); }break;
+	    case 0x0b:if (handler->shift) { handler->OnKeyDown(')'); } else { handler->OnKeyDown('0'); }break;
+	    //special chars 2
+	    case 0x0c:if (handler->shift) { handler->OnKeyDown('_'); } else { handler->OnKeyDown('-'); }break;
+	    case 0x0d:if (handler->shift) { handler->OnKeyDown('+'); } else { handler->OnKeyDown('='); }break;
+	    //first row of letters
+	    case 0x10:if (handler->shift ^ handler->caps) { handler->OnKeyDown('Q'); } else { handler->OnKeyDown('q'); }break;
+	    case 0x11:if (handler->shift ^ handler->caps) { handler->OnKeyDown('W'); } else { handler->OnKeyDown('w'); }break;
+	    case 0x12:if (handler->shift ^ handler->caps) { handler->OnKeyDown('E'); } else { handler->OnKeyDown('e'); }break;
+	    case 0x13:if (handler->shift ^ handler->caps) { handler->OnKeyDown('R'); } else { handler->OnKeyDown('r'); } break;
+	    case 0x14:if (handler->shift ^ handler->caps) { handler->OnKeyDown('T'); } else { handler->OnKeyDown('t'); }break;
+	    case 0x15:if (handler->shift ^ handler->caps) { handler->OnKeyDown('Y'); } else { handler->OnKeyDown('y'); }break;
+	    case 0x16:if (handler->shift ^ handler->caps) { handler->OnKeyDown('U'); } else { handler->OnKeyDown('u'); }break;
+	    case 0x17:if (handler->shift ^ handler->caps) { handler->OnKeyDown('I'); } else { handler->OnKeyDown('i'); }break;
+	    case 0x18:if (handler->shift ^ handler->caps) { handler->OnKeyDown('O'); } else { handler->OnKeyDown('o'); }break;
+	    case 0x19:if (handler->shift ^ handler->caps) { handler->OnKeyDown('P'); } else { handler->OnKeyDown('p'); }break;
+	    //special chars 3
+	    case 0x1a:if (handler->shift) { handler->OnKeyDown('{'); } else { handler->OnKeyDown('['); }break;
+	    case 0x1b:if (handler->shift) { handler->OnKeyDown('}'); } else { handler->OnKeyDown(']'); }break;
+	    case 0x2b:if (handler->shift) { handler->OnKeyDown('|'); } else { handler->OnKeyDown('\\'); }break;
+	    //second row of letters		
+	    case 0x1e:if (handler->shift ^ handler->caps) { handler->OnKeyDown('A'); } else { handler->OnKeyDown('a'); }break;
+	    case 0x1f:if (handler->shift ^ handler->caps) { handler->OnKeyDown('S'); } else { handler->OnKeyDown('s'); }break;
+	    case 0x20:if (handler->shift ^ handler->caps) { handler->OnKeyDown('D'); } else { handler->OnKeyDown('d'); }break;
+	    case 0x21:if (handler->shift ^ handler->caps) { handler->OnKeyDown('F'); } else { handler->OnKeyDown('f'); }break;
+	    case 0x22:if (handler->shift ^ handler->caps) { handler->OnKeyDown('G'); } else { handler->OnKeyDown('g'); }break;
+	    case 0x23:if (handler->shift ^ handler->caps) { handler->OnKeyDown('H'); } else { handler->OnKeyDown('h'); }break;
+	    case 0x24:if (handler->shift ^ handler->caps) { handler->OnKeyDown('J'); } else { handler->OnKeyDown('j'); }break;
+	    case 0x25:if (handler->shift ^ handler->caps) { handler->OnKeyDown('K'); } else { handler->OnKeyDown('k'); }break;
+	    case 0x26:if (handler->shift ^ handler->caps) { handler->OnKeyDown('L'); } else { handler->OnKeyDown('l'); }break;
+	    //special chars 4
+	    case 0x27:if (handler->shift) { handler->OnKeyDown(':'); } else { handler->OnKeyDown(';'); }break;
+	    case 0x28:if (handler->shift) { handler->OnKeyDown('\"'); } else { handler->OnKeyDown('\''); }break;
+	    //third row of letters
+	    case 0x2c:if (handler->shift ^ handler->caps) { handler->OnKeyDown('Z'); } else { handler->OnKeyDown('z'); }break;
+	    case 0x2d:if (handler->shift ^ handler->caps) { handler->OnKeyDown('X'); } else { handler->OnKeyDown('x'); }break;
+	    case 0x2e:if (handler->shift ^ handler->caps) { handler->OnKeyDown('C'); } else { handler->OnKeyDown('c'); }break;
+	    case 0x2f:if (handler->shift ^ handler->caps) { handler->OnKeyDown('V'); } else { handler->OnKeyDown('v'); }break;
+	    case 0x30:if (handler->shift ^ handler->caps) { handler->OnKeyDown('B'); } else { handler->OnKeyDown('b'); }break;
+	    case 0x31:if (handler->shift ^ handler->caps) { handler->OnKeyDown('N'); } else { handler->OnKeyDown('n'); }break;
+	    case 0x32:if (handler->shift ^ handler->caps) { handler->OnKeyDown('M'); } else { handler->OnKeyDown('m'); }break;
+	    //special chars 5
+	    case 0x33:if (handler->shift) { handler->OnKeyDown('<'); } else { handler->OnKeyDown(','); }break;
+	    case 0x34:if (handler->shift) { handler->OnKeyDown('>'); } else { handler->OnKeyDown('.'); }break;
+	    case 0x35:if (handler->shift) { handler->OnKeyDown('?'); } else { handler->OnKeyDown('/'); }break;
     
-    if(handler == 0)
-        return esp;
-    
-    if(key < 0x80)
-    {
-        switch(key)
-        {
-            case 0x02: handler->OnKeyDown('1'); break;
-            case 0x03: handler->OnKeyDown('2'); break;
-            case 0x04: handler->OnKeyDown('3'); break;
-            case 0x05: handler->OnKeyDown('4'); break;
-            case 0x06: handler->OnKeyDown('5'); break;
-            case 0x07: handler->OnKeyDown('6'); break;
-            case 0x08: handler->OnKeyDown('7'); break;
-            case 0x09: handler->OnKeyDown('8'); break;
-            case 0x0A: handler->OnKeyDown('9'); break;
-            case 0x0B: handler->OnKeyDown('0'); break;
+	    //space
+	    case 0x39:handler->OnKeyDown(' ');break;
+	    //enter
+	    case 0x1c:handler->OnKeyDown('\n');break;
+	    //handler->caps lock
+	    case 0x3a:handler->caps = handler->caps ^ 1;break;
+	    //windows key
+	    case 0x5b:break;
+	    //backspace
+	    case 0x0e:handler->OnKeyDown('\b');break;
+	    //escape
+	    case 0x01:handler->OnKeyDown('\x1b');break;
+	    //right control
+	    case 0x1d:handler->ctrl = true;break;
+	    case 0x9d:handler->ctrl = false;break;
+	    //tab
+	    case 0x0f:handler->OnKeyDown('\v');break;
+	    //alt keys
+	    case 0x38:handler->alt = true;break;
+	    case 0xb8:handler->alt = true;break;
+	    case 0xe0:handler->alt = false;break;
+	    case 0x4b:handler->OnKeyDown('\xfc');break;
+	    case 0x48:handler->OnKeyDown('\xfd');break;
+	    case 0x50:handler->OnKeyDown('\xfe');break;
+	    //right arrow
+	    case 0x4d:handler->OnKeyDown('\xff');break;
+	    //handler->shift keys
+	    case 0x2a:handler->shift = true;break;
+	    case 0x36:handler->shift = true;break;
+	    case 0xaa: handler->shift = false;break;
+	    case 0xb6: handler->shift = false;break;
+	    default:
+	    	/*		
+	    	printf("KEYBOARD ");
+	    	printfHex(key);
+	    	*/
+	    	handler->KeyboardEventHandler::OnKeyUp();
+	    	break;
+	}
 
-            case 0x10: handler->OnKeyDown('q'); break;
-            case 0x11: handler->OnKeyDown('w'); break;
-            case 0x12: handler->OnKeyDown('e'); break;
-            case 0x13: handler->OnKeyDown('r'); break;
-            case 0x14: handler->OnKeyDown('t'); break;
-            case 0x15: handler->OnKeyDown('z'); break;
-            case 0x16: handler->OnKeyDown('u'); break;
-            case 0x17: handler->OnKeyDown('i'); break;
-            case 0x18: handler->OnKeyDown('o'); break;
-            case 0x19: handler->OnKeyDown('p'); break;
+	return esp;
+}
 
-            case 0x1E: handler->OnKeyDown('a'); break;
-            case 0x1F: handler->OnKeyDown('s'); break;
-            case 0x20: handler->OnKeyDown('d'); break;
-            case 0x21: handler->OnKeyDown('f'); break;
-            case 0x22: handler->OnKeyDown('g'); break;
-            case 0x23: handler->OnKeyDown('h'); break;
-            case 0x24: handler->OnKeyDown('j'); break;
-            case 0x25: handler->OnKeyDown('k'); break;
-            case 0x26: handler->OnKeyDown('l'); break;
-
-            case 0x2C: handler->OnKeyDown('y'); break;
-            case 0x2D: handler->OnKeyDown('x'); break;
-            case 0x2E: handler->OnKeyDown('c'); break;
-            case 0x2F: handler->OnKeyDown('v'); break;
-            case 0x30: handler->OnKeyDown('b'); break;
-            case 0x31: handler->OnKeyDown('n'); break;
-            case 0x32: handler->OnKeyDown('m'); break;
-            case 0x33: handler->OnKeyDown(','); break;
-            case 0x34: handler->OnKeyDown('.'); break;
-            case 0x35: handler->OnKeyDown('-'); break;
-
-            case 0x1C: handler->OnKeyDown('\n'); break;
-            case 0x39: handler->OnKeyDown(' '); break;
-
-            default:
-            {
-                printf("KEYBOARD 0x");
-                printfHex(key);
-                break;
+void myos::drivers::PrintfKeyboardEventHandler::OnKeyDown(char c)
+{
+        char* foo = " ";
+        if(myos::common::programs::Terminal::status==0){
+            if(c=='\n'){
+				printf("\n");
+                programs::Terminal::HandleCommand(programs::Terminal::command);
+				memset(programs::Terminal::command, 0, sizeof programs::Terminal::command);
             }
+            else{
+                char* command = programs::Terminal::command;
+                while(*command != '\0'){command++;};
+                *command = c;
+                }
         }
-    }
-    return esp;
+        foo[0] = c;
+        printf(foo);
 }

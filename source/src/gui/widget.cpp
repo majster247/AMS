@@ -161,6 +161,6 @@ void CompositeWidget::OnKeyDown(char str)
 void CompositeWidget::OnKeyUp(char str)
 {
     if(focussedChild != 0)
-        focussedChild->OnKeyUp(str);    
+        focussedChild->OnKeyDown(str);    
 }
 

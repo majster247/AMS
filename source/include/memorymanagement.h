@@ -44,6 +44,7 @@ void* operator new[](unsigned size, void* ptr);
 
 void operator delete(void* ptr);
 void operator delete[](void* ptr);
+void* memset(void* dest, int value, myos::common::size_t count);
 
 
 #endif

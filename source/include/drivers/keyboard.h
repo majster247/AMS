@@ -15,10 +15,17 @@ namespace myos
         class KeyboardEventHandler
         {
         public:
+				bool ctrl;
+				bool alt;
+				bool shift;
+				bool caps;
+
+
+        public:
             KeyboardEventHandler();
 
             virtual void OnKeyDown(char);
-            virtual void OnKeyUp(char);
+            virtual void OnKeyUp();
         };
         
         class KeyboardDriver : public myos::hardwarecommunication::InterruptHandler, public Driver
@@ -28,12 +35,17 @@ namespace myos
             
             KeyboardEventHandler* handler;
         public:
+            myos::common::uint8_t keyHex = 0xff;
             KeyboardDriver(myos::hardwarecommunication::InterruptManager* manager, KeyboardEventHandler *handler);
             ~KeyboardDriver();
             virtual myos::common::uint32_t HandleInterrupt(myos::common::uint32_t esp);
             virtual void Activate();
         };
-
+        class PrintfKeyboardEventHandler : public KeyboardEventHandler
+        {
+        public:
+            void OnKeyDown(char c);
+        };
     }
 }
     
