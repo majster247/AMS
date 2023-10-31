@@ -1,5 +1,6 @@
 
 #include <common/types.h>
+#include <common/universalfunc.h>
 #include <gdt.h>
 #include <memorymanagement.h>
 #include <hardwarecommunication/interrupts.h>
@@ -14,9 +15,8 @@
 #include <gui/window.h>
 #include <multitasking.h>
 #include <drivers/amd_am79c973.h>
-#include <filesystem/shadowwizard.h>
 #include <common/programs/terminal.h>
-#include <common/universalfunc.h>
+
 
 //#define GRAPHICSMODE
 
@@ -26,6 +26,93 @@ using namespace myos::common;
 using namespace myos::drivers;
 using namespace myos::hardwarecommunication;
 using namespace myos::gui;
+
+
+
+void putchar(unsigned char ch, unsigned char forecolor, 
+		unsigned char backcolor, uint8_t x, uint8_t y) {
+
+	uint16_t attrib = (backcolor << 4) | (forecolor & 0x0f);
+	volatile uint16_t* vidmem;
+	vidmem = (volatile uint16_t*)0xb8000 + (80*y+x);
+	*vidmem = ch | (attrib << 8);
+}
+
+
+void printfTUI(uint8_t forecolor, uint8_t backcolor, 
+		uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2,
+		bool shadow) {
+
+
+	for (uint8_t y = 0; y < 25; y++) {
+		
+		for (uint8_t x = 0; x < 80; x++) {
+
+			putchar(0xff, 0x00, backcolor, x, y);
+		}
+	}
+	
+	uint8_t resetX = x1;
+
+
+	while (y1 < y2) {
+	
+		while (x1 < x2) {
+		
+			putchar(0xff, 0x00, forecolor, x1, y1);
+			x1++;
+		}
+		y1++;
+		
+		//side shadow
+		if (shadow) {
+		
+			putchar(0xff, 0x00, 0x00, x1, y1);
+		}
+		x1 = resetX;
+	}
+
+	//bottom shadow
+	if (shadow) {
+		
+		for (resetX++; resetX < (x2 + 1); resetX++) {
+	
+			putchar(0xff, 0x00, 0x00, resetX, y1);
+		}
+	}
+}
+
+
+
+
+void printfColor(char* str, uint8_t forecolor, uint8_t backcolor, uint8_t x, uint8_t y) {
+
+	for (int i = 0; str[i] != '\0'; i++) {
+
+		if (str[i] == '\n') {		
+		
+			y++;
+			x = 0;
+
+		} else {
+			
+			putchar(str[i], forecolor, backcolor, x, y);
+			x++;
+		}
+
+		if (x >= 80) {
+			
+			y++;
+			x = 0;
+		}
+
+		if (y >= 25) {
+		
+			y = 0;
+		}
+	}
+}
+
 
 
 void printf(char* str) {

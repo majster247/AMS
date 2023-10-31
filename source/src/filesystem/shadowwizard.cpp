@@ -517,60 +517,60 @@ bool myos::filesystem::DeleteFile(char* name) {
 	return true;
 }
 
-/*uint32_t filesystem::FileList() {
 
-	AdvancedTechnologyAttachment ata0m(0x1F0, true);
-	
-	uint32_t fileNum = 0;
-	uint8_t numOfFiles[512];
-	ata0m.Read28(512, numOfFiles, 512, 0);
+common::uint32_t myos::filesystem::FileList(){
 
-	for (int i = 0; i < 512; i++) {
+			drivers::AdvancedTechnologyAttachment ata0m(0x1F0, true);
 
-		fileNum += numOfFiles[i];
-	}
-	
+			common::uint32_t fileNum = 0;
+			common::uint8_t numOfFiles[512];
+			ata0m.Read28(512, numOfFiles, 512, 0);
 
-	uint8_t sectorData[512];
-	uint8_t fileName[33];
-
-	uint32_t location = 0;
-
-	for (int i = 0; i < fileNum; i++) {
-	
-		ata0m.Read28(513+i, sectorData, 4, 0);
-	
-		location = (sectorData[0] << 24) | 
-			   (sectorData[1] << 16) | 
-			   (sectorData[2] << 8) | 
-			   (sectorData[3]);
-	
-		if (location) {
-		
-			ata0m.Read28(location, sectorData, 40, 0);
-		
-			for (int j = 0; j < 32; j++) {
-
-				fileName[j] = sectorData[j+8];
+			for (int i = 0; i < 512; i++) {
+			
+				fileNum += numOfFiles[i];
 			}
-			fileName[32] = '\0';
-	
 
-			printf((char*)fileName);
-			printf("    ");
-			printf(int2str(location));
-			printf("\n");
-		}
 
-		
-		for (int j = 8; j < 40; j++) {
-		
-			fileName[j] = 0x00;
-			sectorData[j] = 0x00;
-		}
-		
-	}
+			common::uint8_t sectorData[512];
+			common::uint8_t fileName[33];
 
-	return fileNum;
-}
-*/
+			common::uint32_t location = 0;
+
+			for (int i = 0; i < fileNum; i++) {
+			
+				ata0m.Read28(513+i, sectorData, 4, 0);
+
+				location = (sectorData[0] << 24) | 
+					   (sectorData[1] << 16) | 
+					   (sectorData[2] << 8) | 
+					   (sectorData[3]);
+
+				if (location) {
+				
+					ata0m.Read28(location, sectorData, 40, 0);
+
+					for (int j = 0; j < 32; j++) {
+					
+						fileName[j] = sectorData[j+8];
+					}
+					fileName[32] = '\0';
+
+
+					printf((char*)fileName);
+					printf("    ");
+					printf(common::universalfunc::int2str(location));
+					printf("\n");
+				}
+
+				/*
+				for (int j = 8; j < 40; j++) {
+				
+					fileName[j] = 0x00;
+					sectorData[j] = 0x00;
+				}
+				*/
+			}
+
+			return fileNum;
+		}		

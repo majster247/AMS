@@ -3,7 +3,9 @@
 
 #include <common/types.h>
 #include <drivers/ata.h>
+#include <common/universalfunc.h>
 
+void printf(char* str);
 
 namespace myos {
 
@@ -37,8 +39,9 @@ namespace myos {
 		bool DeleteFile(char* name);
 
 		common::uint32_t GetFileSize(char* name);
-		//common::uint32_t FileList();
+		common::uint32_t FileList();
 	}
+
 }
 
 

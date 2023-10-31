@@ -22,11 +22,12 @@ objects = obj/loader.o \
           obj/drivers/mouse.o \
           obj/drivers/vga.o \
           obj/drivers/ata.o \
+		  obj/filesystem/shadowwizard.o \
           obj/gui/widget.o \
           obj/gui/window.o \
           obj/gui/desktop.o \
+		  obj/programs/editor.o \
 		  obj/programs/terminal.o \
-		  obj/filesystem/shadowwizard.o \
 		  obj/kernel.o
 #obj/drivers/filesystem.o \
 #obj/common/gdt.o \
@@ -58,7 +59,7 @@ mykernel.iso: mykernel.bin
 	echo 'set timeout=0'                      > iso/boot/grub/grub.cfg
 	echo 'set default=0'                     >> iso/boot/grub/grub.cfg
 	echo ''                                  >> iso/boot/grub/grub.cfg
-	echo 'menuentry "AMS-OS v0.6.2" {' >> iso/boot/grub/grub.cfg
+	echo 'menuentry "AMS-OS v0.6.1" {' >> iso/boot/grub/grub.cfg
 	echo '  multiboot /boot/mykernel.bin'    >> iso/boot/grub/grub.cfg
 	echo '  boot'                            >> iso/boot/grub/grub.cfg
 	echo '}'                                 >> iso/boot/grub/grub.cfg

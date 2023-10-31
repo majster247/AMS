@@ -3,6 +3,7 @@
 #include <common/types.h>
 #include <drivers/keyboard.h>
 #include <filesystem/shadowwizard.h>
+#include <common/programs/editor.h>
 using namespace myos;
 using namespace myos::common;
 using namespace myos::common::programs;
@@ -19,7 +20,6 @@ void myos::common::programs::Terminal::HandleCommand(char *command)
 {
 
     if(universalfunc::strcmp(command, "sex") == 0){
-        //filesystem::FileList();
         printf("More sex in future\n");
         printf("[DevMode]A:~:/>");
     }else if (universalfunc::strcmp(command, "HolyWords") == 0)
@@ -49,6 +49,16 @@ void myos::common::programs::Terminal::HandleCommand(char *command)
             printf(universalfunc::int2str(universalfunc::getRandomNumber(1,11)));
             printf("  ");
         }
+    }else if (universalfunc::strcmp(command, "ls") == 0){
+	    uint32_t fileNum = filesystem::FileList();
+	    char* num = universalfunc::int2str(fileNum);
+	
+	    printf("\n");
+	    printf(num);
+	    printf(" files have been allocated.\n");
+    }else if (universalfunc::strcmp(command, "ed") == 0)
+    {
+        fileTUI();
     
     }else{printf("[DevMode]A:~:/>");}
 };
