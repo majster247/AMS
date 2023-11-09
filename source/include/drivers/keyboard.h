@@ -1,52 +1,63 @@
-
-#ifndef __MYOS__DRIVERS__KEYBOARD_H
-#define __MYOS__DRIVERS__KEYBOARD_H
+#ifndef __OS__DRIVERS__KEYBOARD_H
+#define __OS__DRIVERS__KEYBOARD_H
 
 #include <common/types.h>
 #include <hardwarecommunication/interrupts.h>
 #include <drivers/driver.h>
 #include <hardwarecommunication/port.h>
 
-namespace myos
-{
-    namespace drivers
-    {
-    
-        class KeyboardEventHandler
-        {
-        public:
+
+namespace os {
+
+	namespace drivers {
+
+		class KeyboardEventHandler {
+		
+			//protected:
+			public:
 				bool ctrl;
 				bool alt;
 				bool shift;
 				bool caps;
+				
+				bool cli;
+
+			public:
+				KeyboardEventHandler();
+
+				virtual void OnKeyDown(char);
+				virtual void OnKeyUp();
+				
+				virtual void resetMode();
+				
+				//modes
+				virtual void modeSet(os::common::uint8_t);
+		};
 
 
-        public:
-            KeyboardEventHandler();
+		class KeyboardDriver : public os::hardwarecommunication::InterruptHandler, public Driver {
 
-            virtual void OnKeyDown(char);
-            virtual void OnKeyUp();
-        };
-        
-        class KeyboardDriver : public myos::hardwarecommunication::InterruptHandler, public Driver
-        {
-            myos::hardwarecommunication::Port8Bit dataport;
-            myos::hardwarecommunication::Port8Bit commandport;
-            
-            KeyboardEventHandler* handler;
-        public:
-            myos::common::uint8_t keyHex = 0xff;
-            KeyboardDriver(myos::hardwarecommunication::InterruptManager* manager, KeyboardEventHandler *handler);
-            ~KeyboardDriver();
-            virtual myos::common::uint32_t HandleInterrupt(myos::common::uint32_t esp);
-            virtual void Activate();
-        };
-        class PrintfKeyboardEventHandler : public KeyboardEventHandler
-        {
-        public:
-            void OnKeyDown(char c);
-        };
-    }
+				
+			//private:
+			public:
+				os::hardwarecommunication::Port8Bit dataport;
+				os::hardwarecommunication::Port8Bit commandport;
+
+				KeyboardEventHandler* handler;
+
+			public:
+			
+				os::common::uint8_t keyHex = 0xff;
+
+				KeyboardDriver(os::hardwarecommunication::InterruptManager* manager, KeyboardEventHandler *handler);
+				~KeyboardDriver();
+		
+				virtual os::common::uint32_t HandleInterrupt(os::common::uint32_t esp);
+				virtual void Activate();	
+		};
+
+	}
 }
-    
+
+
 #endif

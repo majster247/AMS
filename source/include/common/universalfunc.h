@@ -1,20 +1,14 @@
-#ifndef __MYOS__COMMON__UNIVERSALFUNC_H
-#define __MYOS__COMMON__UNIVERSALFUNC_H
-
+#ifndef __OS__COMMON__UNIVERSALFUNC_H
+#define __OS__COMMON__UNIVERSALFUNC_H
 #include <common/types.h>
+using namespace os::common;
 
-namespace myos
-{
-    namespace common
-    {
-        namespace universalfunc{
-            uint16_t strlen(char* args);
-            char* strcat(char* destination, const char* source);
-            int strcmp(const char *str1, const char *str2);
-            char* int2str(uint32_t num);
-            uint32_t getRandomNumber(uint32_t min, uint32_t max);
-        }
-    }
-}
-    
+        uint64_t factorial(int n);
+        double sin(double x, int n);
+		double cos(double x, int n);
+        double pow(double base, double exponent);
+
+        uint32_t customRand();
+        uint32_t getRandomNumber(uint32_t min, uint32_t max);
+
 #endif

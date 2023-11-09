@@ -1,5 +1,5 @@
-#ifndef __MYOS__DRIVERS__ATA_H
-#define __MYOS__DRIVERS__ATA_H
+#ifndef __OS__DRIVERS__ATA_H
+#define __OS__DRIVERS__ATA_H
 
 
 #include <hardwarecommunication/port.h>
@@ -7,7 +7,7 @@
 #include <common/types.h>
 
 
-namespace myos {
+namespace os {
 
 	namespace drivers {
 

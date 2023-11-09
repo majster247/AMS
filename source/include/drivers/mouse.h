@@ -1,46 +1,52 @@
-
-#ifndef __MYOS__DRIVERS__MOUSE_H
-#define __MYOS__DRIVERS__MOUSE_H
+#ifndef __OS__DRIVERS__MOUSE_H
+#define __OS__DRIVERS__MOUSE_H
 
 #include <common/types.h>
-#include <hardwarecommunication/port.h>
-#include <drivers/driver.h>
 #include <hardwarecommunication/interrupts.h>
+#include <drivers/driver.h>
+#include <hardwarecommunication/port.h>
 
-namespace myos
-{
-    namespace drivers
-    {
-    
-        class MouseEventHandler
-        {
-        public:
-            MouseEventHandler();
+namespace os {
 
-            virtual void OnActivate();
-            virtual void OnMouseDown(myos::common::uint8_t button);
-            virtual void OnMouseUp(myos::common::uint8_t button);
-            virtual void OnMouseMove(int x, int y);
-        };
-        
-        
-        class MouseDriver : public myos::hardwarecommunication::InterruptHandler, public Driver
-        {
-            myos::hardwarecommunication::Port8Bit dataport;
-            myos::hardwarecommunication::Port8Bit commandport;
-            myos::common::uint8_t buffer[3];
-            myos::common::uint8_t offset;
-            myos::common::uint8_t buttons;
+	namespace drivers {
 
-            MouseEventHandler* handler;
-        public:
-            MouseDriver(myos::hardwarecommunication::InterruptManager* manager, MouseEventHandler* handler);
-            ~MouseDriver();
-            virtual myos::common::uint32_t HandleInterrupt(myos::common::uint32_t esp);
-            virtual void Activate();
-        };
+		class MouseEventHandler {
 
-    }
+			public:
+				MouseEventHandler();
+
+				virtual void OnActivate();
+				virtual void OnMouseDown(os::common::uint8_t button);
+				virtual void OnMouseUp(os::common::uint8_t button);
+				virtual void OnMouseMove(int x, int y);
+		};
+
+
+		class MouseDriver : public os::hardwarecommunication::InterruptHandler, public Driver {
+
+			//private:
+			public:
+				os::hardwarecommunication::Port8Bit dataport;
+				os::hardwarecommunication::Port8Bit commandport;
+
+				os::common::uint8_t buffer[3];
+				os::common::int8_t offset;
+				os::common::uint8_t buttons;
+
+				MouseEventHandler* handler;
+
+        		public:
+				bool pressed;
+                		
+				MouseDriver(os::hardwarecommunication::InterruptManager* manager, MouseEventHandler* handler);
+                		~MouseDriver();
+
+                		virtual os::common::uint32_t HandleInterrupt(os::common::uint32_t esp);
+				virtual void Activate();
+		};
+	}
 }
-    
+
+
 #endif
+

@@ -1,26 +1,30 @@
-
-
 .set IRQ_BASE, 0x20
+
+
 
 .section .text
 
-.extern _ZN4myos21hardwarecommunication16InterruptManager15HandleInterruptEhj
+.extern _ZN2os21hardwarecommunication16InterruptManager15handleInterruptEhj
+
+.global _ZN2os21hardwarecommunication16InterruptManager22IgnoreInterruptRequestEv
+
 
 
 .macro HandleException num
-.global _ZN4myos21hardwarecommunication16InterruptManager19HandleException\num\()Ev
-_ZN4myos21hardwarecommunication16InterruptManager19HandleException\num\()Ev:
-    movb $\num, (interruptnumber)
-    jmp int_bottom
+.global _ZN2os21hardwarecommunication16InterruptManager16HandleException\num\()Ev
+_ZN2os21hardwarecommunication16InterruptManager16HandleException\num\()Ev:
+	movb $\num, (interruptnumber)
+	jmp int_bottom
 .endm
 
 
+
 .macro HandleInterruptRequest num
-.global _ZN4myos21hardwarecommunication16InterruptManager26HandleInterruptRequest\num\()Ev
-_ZN4myos21hardwarecommunication16InterruptManager26HandleInterruptRequest\num\()Ev:
-    movb $\num + IRQ_BASE, (interruptnumber)
-    pushl $0
-    jmp int_bottom
+.global _ZN2os21hardwarecommunication16InterruptManager26HandleInterruptRequest\num\()Ev
+_ZN2os21hardwarecommunication16InterruptManager26HandleInterruptRequest\num\()Ev:
+	movb $\num + IRQ_BASE, (interruptnumber)
+	pushl $0
+	jmp int_bottom
 .endm
 
 
@@ -45,6 +49,7 @@ HandleException 0x11
 HandleException 0x12
 HandleException 0x13
 
+
 HandleInterruptRequest 0x00
 HandleInterruptRequest 0x01
 HandleInterruptRequest 0x02
@@ -61,6 +66,8 @@ HandleInterruptRequest 0x0C
 HandleInterruptRequest 0x0D
 HandleInterruptRequest 0x0E
 HandleInterruptRequest 0x0F
+
+
 HandleInterruptRequest 0x31
 
 HandleInterruptRequest 0x80
@@ -68,57 +75,52 @@ HandleInterruptRequest 0x80
 
 int_bottom:
 
-    # save registers
-    #pusha
-    #pushl %ds
-    #pushl %es
-    #pushl %fs
-    #pushl %gs
-    
-    pushl %ebp
-    pushl %edi
-    pushl %esi
+	# save registers
+	#pusha
+	#pushl %ds
+	#pushl %es
+	#pushl %fs
+	#pushl %gs
 
-    pushl %edx
-    pushl %ecx
-    pushl %ebx
-    pushl %eax
+	pushl %ebp
+	pushl %edi
+	pushl %esi
 
-    # load ring 0 segment register
-    #cld
-    #mov $0x10, %eax
-    #mov %eax, %eds
-    #mov %eax, %ees
+	pushl %edx
+	pushl %ecx
+	pushl %ebx
+	pushl %eax
+	
+	#call C++ handler
+	pushl %esp
+	push (interruptnumber)
+	call _ZN2os21hardwarecommunication16InterruptManager15handleInterruptEhj
+	# addl $5, %esp	
+	mov %eax, %esp # switch the stack
 
-    # call C++ Handler
-    pushl %esp
-    push (interruptnumber)
-    call _ZN4myos21hardwarecommunication16InterruptManager15HandleInterruptEhj
-    #add %esp, 6
-    mov %eax, %esp # switch the stack
+	# restore registers	
 
-    # restore registers
-    popl %eax
-    popl %ebx
-    popl %ecx
-    popl %edx
+	popl %eax
+	popl %ebx
+	popl %ecx
+	popl %edx
+	
+	popl %esi
+	popl %edi
+	popl %ebp
 
-    popl %esi
-    popl %edi
-    popl %ebp
-    #pop %gs
-    #pop %fs
-    #pop %es
-    #pop %ds
-    #popa
-    
-    add $4, %esp
+	#popl %gs
+	#popl %fs
+	#popl %es
+	#popl %ds
+	#popa	
 
-.global _ZN4myos21hardwarecommunication16InterruptManager15InterruptIgnoreEv
-_ZN4myos21hardwarecommunication16InterruptManager15InterruptIgnoreEv:
+	add $4, %esp
 
-    iret
+_ZN2os21hardwarecommunication16InterruptManager22IgnoreInterruptRequestEv:
 
+	iret
 
 .data
-    interruptnumber: .byte 0
+	interruptnumber: .byte 0
+	
