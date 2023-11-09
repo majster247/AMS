@@ -3,6 +3,10 @@
 #include <filesys/ofs.h>
 #include <script.h>
 #include <drivers/speaker.h>
+#include <drivers/vga.h>
+#include <gui/desktop.h>
+#include <gui/window.h>
+#include <gui/widget.h>
 
 
 using namespace os;
@@ -179,6 +183,38 @@ void rdisk(char* args, CommandLine* cli) {
 	RmDisk(sector, size);
 }
 
+void serbia(char* args, CommandLine* cli){
+	  Speaker speaker;
+
+    // Define note frequencies
+    uint32_t C = 261;
+    uint32_t D = 294;
+    uint32_t E = 329;
+    uint32_t F = 349;
+    uint32_t G = 392;
+    uint32_t A = 440;
+    uint32_t B = 493;
+
+    // Serbia strong melody example (adjust as needed)
+    for (int i = 0; i < 60; ++i) {
+        speaker.Speak(A);
+        sleep(400);
+        speaker.Speak(G);
+        sleep(200);
+        speaker.Speak(E);
+        sleep(200);
+        speaker.Speak(G);
+        sleep(400);
+        speaker.Speak(A);
+        sleep(400);
+        speaker.Speak(B);
+        sleep(400);
+        speaker.Speak(C);
+        sleep(400);
+        speaker.Speak(D);
+        sleep(400);
+    }
+}
 
 void files(char* args, CommandLine* cli) {
 
@@ -564,9 +600,9 @@ void help(char* args, CommandLine* cli) {
 	char* ch = " \n";
 	ch[0] = 2;
 
-	printf("\nWelcome to osakaOS!\n");
+	printf("\nWelcome to AMS-OS!\n");
 	printf("This is the command line interface.\n");
-	printf("Please take it easy ");
+	printf("Milions of CIA must die ");
 	printf(ch);
 
 	printf("If you feel lost, try the following commands: \n\n");
@@ -763,6 +799,7 @@ void CommandLine::hash_cli_init() {
 	this->hash_add("midi", sound);
 	//this->hash_add("dbeep", dbeep);
 	this->hash_add("wmem", wmem);
+	this->hash_add("serbia", serbia);
 	this->hash_add("rmem", rmem);
 	this->hash_add("wdisk", wdisk);
 	this->hash_add("rdisk", rdisk);

@@ -810,7 +810,7 @@ uint32_t FileList() {
 
 
 
-void printOsaka(uint8_t num) {
+void printART(uint8_t num) {
 	
 	Funny art;
 	printf("\v");
@@ -889,7 +889,9 @@ void explodeMain() {
 
 	//vga
 	VideoGraphicsArray vga;
-	vga.SetMode(320, 200, 8);
+	if (!vga.SetMode(1280, 720, 8)) {
+    	vga.SetMode(320, 200, 8);
+	}
 	
 	uint8_t color = 0;
 	
@@ -909,8 +911,8 @@ void explodeMain() {
 		speaker.PlaySound(1200);
 		speaker.NoSound();
 		
-		for (uint16_t y = 0; y < 200; y++) {
-			for (uint16_t x = 0; x < 320; x++) {
+		for (uint16_t y = 0; y < 720; y++) {
+			for (uint16_t x = 0; x < 1280; x++) {
 		
 				vga.PutPixel(x, y, color);
 			}
@@ -966,7 +968,7 @@ extern "C" void kernelMain(void* multiboot_structure, uint32_t magicnumber) {
 	
 	drvManager.AddDriver(&keyboard);
 
-	Desktop desktop(320, 200, 0x01);
+	Desktop desktop(1280,1024, 0x01);
 	MouseDriver mouse(&interrupts, &desktop);
 
 	drvManager.AddDriver(&mouse);
@@ -989,14 +991,10 @@ extern "C" void kernelMain(void* multiboot_structure, uint32_t magicnumber) {
 	//while (1) {}
 	//everything beyond this point is no longer testing/initialization
 
-
-	//the boot screen and very important cube	
-	Funny haha;		
-	printOsaka(4);
-	uint8_t cubeCount = 0;
+	printART(4);
 
 	makeBeep(600);
-	
+	Funny haha;
 	do {	
 		haha.amsFloppy();
 	
@@ -1004,7 +1002,17 @@ extern "C" void kernelMain(void* multiboot_structure, uint32_t magicnumber) {
 	printf("\v");
 
 
-
+	printf("AMS-OS v0.6.5\n");
+	printf("Copyright (C) 2019-2023 AMS-OS Project\n");
+	printf("License: MIT License\n");
+	printf("https://github.com/majster247/AMS/\n");
+	printf("==========================================================================\n");
+	printf("Welcome to the AMS Operating System!\n");
+	printf("This system will now boot into the command line interface.\n");
+	printf("Please wait...\n");
+	printf("Booting up in ");printf(int2str(5));printf(" seconds.\n");
+	printf("===========================================================================\n");
+	sleep(5000);
 	//initialize command line hash table
 	kbhandler.cli = true;
 	kbhandler.hash_cli_init();
@@ -1029,7 +1037,12 @@ extern "C" void kernelMain(void* multiboot_structure, uint32_t magicnumber) {
 	KeyboardDriver keyboardDesktop(&interrupts, &desktop);
 	drvManager.Replace(&keyboardDesktop, 0);
 
-	vga.SetMode(320, 200, 8);	
+	
+	vga.SetMode(1280,1024,8);
+
+	
+	
+	
 
 
 	Window win1(&desktop, 10, 10, 40, 20, 0x04);
@@ -1043,6 +1056,6 @@ extern "C" void kernelMain(void* multiboot_structure, uint32_t magicnumber) {
 	while (keyboardDesktop.keyHex != 0x39) {
 		
 		desktop.Draw(&vga, 1);
-		sleep(17);
+		sleep(5);
 	}
 }

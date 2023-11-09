@@ -55,6 +55,8 @@ namespace os {
 							   common::uint8_t color);
 				
 				void DrawToScreen();
+
+				static common::uint32_t status;
 		};	
 
 

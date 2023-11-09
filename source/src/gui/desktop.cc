@@ -28,7 +28,7 @@ Desktop::~Desktop() {
 void Desktop::Draw(common::GraphicsContext* gc, bool mode) {
 
 	//desktop background, one big color for now
-	gc->FillRectangle(0, 0, 200, 320, this->color);
+	gc->FillRectangle(0, 0, 720, 1280, this->color);
 	int32_t j=2;
 	for(int32_t i=0;i<=25;i++){
 		if(i%2==0){j++;}
