@@ -1,0 +1,14 @@
+{
+  "files": {
+    "main.css": "/AMS/static/css/main.27f29071.css",
+    "main.js": "/AMS/static/js/main.5682706f.js",
+    "static/media/logo.png": "/AMS/static/media/logo.980bc91670037b2dcc94.png",
+    "index.html": "/AMS/index.html",
+    "main.27f29071.css.map": "/AMS/static/css/main.27f29071.css.map",
+    "main.5682706f.js.map": "/AMS/static/js/main.5682706f.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.27f29071.css",
+    "static/js/main.5682706f.js"
+  ]
+}
