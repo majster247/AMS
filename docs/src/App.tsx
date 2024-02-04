@@ -6,9 +6,11 @@ import Posts from './components/Posts/Posts';
 import Contact from './components/Contact/Contact';
 import Vault from './components/Vault/Vault';
 
+const basename = '/'
+
 const MainApp: React.FC = () => {
   return (
-    <Router>
+    <Router basename={basename}>
       <div>
         <header>
           <h1>AMS-OS</h1>
