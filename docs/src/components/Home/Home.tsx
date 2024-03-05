@@ -8,6 +8,8 @@ const Home: React.FC = () => {
       <p>
         AMS-OS is a simple and lightweight operating system designed for enthusiasts and developers. It's not like another Unix-based system - it's fully written by hand and compiled with its own compiler in its own language.
       </p>
+      <h5>Github repo: <a href="https://github.com/majster247/AMS/">AMS-OS official repo</a></h5>
+
 
       <h2>Key Features</h2>
       <ul>

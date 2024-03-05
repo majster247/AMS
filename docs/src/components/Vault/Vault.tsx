@@ -13,6 +13,7 @@ const Vault: React.FC = () => {
                     <ol>
                         <ul>
                             <h3>ASM-OS distributions</h3>
+                            <h5>Github download folder: <a href="https://github.com/majster247/AMS/tree/main/docs/download/Vault/AMS">AMS-OS official Vault</a></h5>
                             <li>AMS-OS v0.6.1 [PRE-ALPHA]:
                                 <ol>ISO Release: <a href="Vault/AMS/AMS-OSv0.6.1/AMS-OS-0.6.1.iso">Download</a></ol>
                                 <ol>BIN Release: <a href="Vault/AMS/AMS-OSv0.6.1/AMS-OS-0.6.1.bin">Download</a></ol>
