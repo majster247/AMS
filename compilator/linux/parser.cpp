@@ -1,4 +1,8 @@
 #include "parser.h"
+#include "debug.h"
+#include <stdexcept>
+
+#define DEFAULT_STRING_SIZE 256
 
 Parser::Parser(const std::vector<Token>& tokens, SymbolTable& symbolTable) : tokens(tokens), symbolTable(symbolTable), position(0) {}
 
@@ -11,91 +15,101 @@ Node Parser::parse() {
 }
 
 Node Parser::parseStatement() {
-    if (tokens[position].type == TokenType::KEYWORD) {
-        if (tokens[position].value == "if") {
-            return parseIfStatement();
-        } else if (tokens[position].value == "return") {
-            return parseReturnStatement();
-        }
+    const Token& token = tokens[position];
+    trackDebugInfo(tokens[position].value, position, lineNumber, columnNumber);
+
+    if (token.type == TokenType::KEYWORD && token.value == "int") {
+        return parseVariableDeclaration();
+    } else if (token.type == TokenType::IDENTIFIER) {
+        return parseAssignment();
+    } else if (token.type == TokenType::KEYWORD && token.value == "if") {
+        return parseIfStatement();
+    } else if (token.type == TokenType::KEYWORD && token.value == "return") {
+        return parseReturnStatement();
     }
-    return parseExpression();
+
+    throw std::runtime_error("Unexpected token: " + token.value);
 }
 
 Node Parser::parseExpression() {
-    // Na początek obsłużmy proste przypisania i deklaracje zmiennych
-    if (tokens[position].type == TokenType::IDENTIFIER) {
-        if (position + 1 < tokens.size() && tokens[position + 1].type == TokenType::OPERATOR && tokens[position + 1].value == "=") {
-            return parseAssignment();
-        }
+    Node left = parseSimpleExpression();
+    
+    while (position < tokens.size() && tokens[position].type == TokenType::OPERATOR && tokens[position].value == "==") {
+        Token op = tokens[position++];
+        Node right = parseSimpleExpression();
+        Node node(NodeType::EXPRESSION, op);
+        node.children.push_back(left);
+        node.children.push_back(right);
+        left = node;
     }
+    
+    return left;
+}
 
-    // Sprawdź, czy następny token to słowo kluczowe "int" oznaczające deklarację zmiennej
-    if (tokens[position].type == TokenType::KEYWORD && tokens[position].value == "int") {
-        return parseVariableDeclaration();
+Node Parser::parseSimpleExpression() {
+    const Token& token = tokens[position];
+    if (token.type == TokenType::NUMBER || token.type == TokenType::IDENTIFIER) {
+        Node node(NodeType::EXPRESSION, token);
+        position++;
+        return node;
     }
-
-    // Jeśli żaden z powyższych przypadków nie pasuje, utwórz węzeł dla wyrażenia
-    Node node{NodeType::EXPRESSION, {}, tokens[position]};
-    position++;
-    return node;
+    throw std::runtime_error("Unexpected token in expression: " + token.value);
 }
 
 Node Parser::parseVariableDeclaration() {
-    // Upewnij się, że mamy wystarczająco tokenów w wektorze
-    if (position + 2 >= tokens.size()) {
+    if (position + 1 >= tokens.size()) {
         throw std::runtime_error("Unexpected end of input");
     }
 
-    // Pobierz typ danych
     std::string dataType = tokens[position].value;
-
-    // Sprawdź, czy typ danych jest obsługiwany
-    DataType dataTypeEnum;
-    if (dataType == "int") {
-        dataTypeEnum = DataType::INT;
-    } else if (dataType == "float") {
-        dataTypeEnum = DataType::FLOAT;
-    } else if (dataType == "char") {
-        dataTypeEnum = DataType::CHAR;
-    } else if (dataType == "string") {
-        dataTypeEnum = DataType::STRING;
-    } else {
-        throw std::runtime_error("Unsupported data type: " + dataType);
-    }
-
-    // Pobierz nazwę zmiennej
     std::string varName = tokens[position + 1].value;
-    position += 2; // Przesuń pozycję do następnego tokena po nazwie zmiennej
+    position += 2;
 
-    // Sprawdź, czy zmienna została już zadeklarowana
     if (symbolTable.symbolExists(varName)) {
         throw std::runtime_error("Variable already declared: " + varName);
     }
 
-    // Dynamiczne przydzielanie wielkości dla stringa
-    int dataSize = 0;
-    if (dataTypeEnum == DataType::STRING) {
-        // Wczytaj wielkość ze specjalnej lokalizacji w kodzie (np. po "=")
-        if (position < tokens.size() && tokens[position].type == TokenType::OPERATOR && tokens[position].value == "=") {
-            position++; // Przejdź do kolejnego tokenu po "="
-            if (position < tokens.size() && tokens[position].type == TokenType::STRING) {
-                dataSize = tokens[position].value.length();
-            } else {
-                throw std::runtime_error("Expected string literal after '='");
-            }
-        } else {
-            // Domyślna wielkość dla stringa, jeśli nie jest określona w kodzie
-            dataSize = DEFAULT_STRING_SIZE;
-        }
+    trackDebugInfo(tokens[position].value, position, lineNumber, columnNumber);
+
+    size_t dataSize;
+    if (dataType == "int") {
+        dataSize = sizeof(int);
+    } else if (dataType == "float") {
+        dataSize = sizeof(float);
+    } else if (dataType == "char") {
+        dataSize = sizeof(char);
+    } else if (dataType == "double") {
+        dataSize = sizeof(double);
+    } else if (dataType == "string") {
+        dataSize = DEFAULT_STRING_SIZE;
+    } else {
+        throw std::runtime_error("Unknown data type: " + dataType);
     }
 
-    // Dodaj zmienną do tabeli symboli
-    symbolTable.addSymbol(varName, SymbolType::VARIABLE, dataTypeEnum, dataSize);
+    DataType dt = dataType == "int" ? DataType::INT :
+                  dataType == "float" ? DataType::FLOAT :
+                  dataType == "char" ? DataType::CHAR :
+                  dataType == "double" ? DataType::DOUBLE :
+                  dataType == "string" ? DataType::STRING : DataType::INT;
+    symbolTable.addSymbol(varName, SymbolType::VARIABLE, dt, dataSize);
 
-    // Utwórz węzeł dla deklaracji zmiennej i dodaj dzieci (typ i nazwę zmiennej)
-    Node node{NodeType::VARIABLE_DECLARATION, {}, tokens[position - 2]}; // Użyj poprzedniego tokenu (typu) jako głównego tokenu węzła
-    node.children.push_back({NodeType::EXPRESSION, {}, Token(TokenType::IDENTIFIER, dataType)}); // Dodaj typ zmiennej jako dziecko
-    node.children.push_back({NodeType::EXPRESSION, {}, Token(TokenType::IDENTIFIER, varName)}); // Dodaj nazwę zmiennej jako dziecko
+    Node node(NodeType::VARIABLE_DECLARATION, tokens[position - 2]);
+    node.children.push_back(Node(NodeType::EXPRESSION, Token(TokenType::IDENTIFIER, dataType)));
+    node.children.push_back(Node(NodeType::EXPRESSION, Token(TokenType::IDENTIFIER, varName)));
+
+    if (position < tokens.size() && tokens[position].type == TokenType::OPERATOR && tokens[position].value == "=") {
+        position++;
+        node.children.push_back(parseExpression());
+    }
+
+    // Sprawdź czy po deklaracji zmiennej jest średnik
+    if (position < tokens.size() && tokens[position].type == TokenType::SEPARATOR && tokens[position].value == ";") {
+        position++;
+    } else {
+        // Increment column number by the length of the token value and one for the assignment operator
+        columnNumber += tokens[position].value.length() + 1;
+        throw std::runtime_error("Expected ';' after variable declaration. Line: " + std::to_string(lineNumber) + ", Column: " + std::to_string(columnNumber)); //error is here, need to check why
+    }
 
     return node;
 }
@@ -105,73 +119,100 @@ Node Parser::parseVariableDeclaration() {
 
 
 Node Parser::parseAssignment() {
-    // Upewnij się, że mamy wystarczająco tokenów w wektorze
-    if (position + 2 >= tokens.size()) {
-        throw std::runtime_error("Unexpected end of input");
-    }
-
-    // Pobierz nazwę zmiennej
     std::string varName = tokens[position].value;
-    position++; // Przesuń pozycję do następnego tokenu po nazwie zmiennej
+    position++; // Skip variable name
+    if (tokens[position].type != TokenType::OPERATOR || tokens[position].value != "=") {
+        throw std::runtime_error("Expected '=' in assignment.");
+    }
+    position++; // Skip '='
 
-    // Sprawdź, czy zmienna istnieje w tabeli symboli
-    if (!symbolTable.symbolExists(varName)) {
-        throw std::runtime_error("Variable not declared: " + varName);
+    Node exprNode = parseExpression();
+    size_t dataSize = 0;
+    if (symbolTable.getSymbolDataType(varName) == DataType::STRING) {
+        dataSize = exprNode.token.value.length();
+    }
+    symbolTable.updateSymbolSize(varName, dataSize);
+
+    Node node(NodeType::ASSIGNMENT, Token(TokenType::OPERATOR, "="));
+    node.children.push_back(Node(NodeType::EXPRESSION, Token(TokenType::IDENTIFIER, varName)));
+    node.children.push_back(exprNode);
+
+    if (position < tokens.size() && tokens[position].type == TokenType::SEPARATOR && tokens[position].value == ";") {
+        position++;
+    } else {
+        throw std::runtime_error("Expected ';' after assignment.");
     }
 
-    // Pobierz symbol z tabeli symboli
-    Symbol symbol = symbolTable.getSymbol(varName);
-
-    // Sprawdź, czy typ zmiennej to string
-    if (symbol.getDataType() == DataType::STRING) {
-        // Dynamicznie przydziel wielkość dla zmiennej typu string
-        int dataSize = 0;
-        if (position < tokens.size() && tokens[position].type == TokenType::OPERATOR && tokens[position].value == "=") {
-            position++; // Przejdź do kolejnego tokenu po "="
-            if (position < tokens.size() && tokens[position].type == TokenType::STRING) {
-                dataSize = tokens[position].value.length();
-            } else {
-                throw std::runtime_error("Expected string literal after '='");
-            }
-        } else {
-            // Jeśli wielkość nie jest określona, użyj domyślnej wartości
-            dataSize = DEFAULT_STRING_SIZE;
-        }
-
-        // Zaktualizuj wielkość zmiennej w tabeli symboli
-        symbolTable.updateSymbolSize(varName, dataSize);
-    }
-
-    Node node{NodeType::ASSIGNMENT, {}, Token(TokenType::OPERATOR, "=")};
-    node.children.push_back({NodeType::EXPRESSION, {}, Token(TokenType::IDENTIFIER, varName)});
-    position++; // Przeskocz operator "="
-    node.children.push_back(parseExpression());
     return node;
 }
-
 
 Node Parser::parseIfStatement() {
-    Node node{NodeType::IF_STATEMENT, {}, tokens[position]};
-    position++; // Przeskocz "if"
-    position++; // Przeskocz "("
-    node.children.push_back(parseExpression());
-    position++; // Przeskocz ")"
-    node.children.push_back(parseStatement());
-    return node;
-}
+    Token ifToken = tokens[position];
+    position++; // Skip 'if'
 
-Node Parser::parseReturnStatement() {
-    Node node{NodeType::RETURN_STATEMENT, {}, tokens[position]};
-    position++; // Przeskocz "return"
-    node.children.push_back(parseExpression());
+    if (tokens[position].type != TokenType::SEPARATOR || tokens[position].value != "(") {
+        throw std::runtime_error("Expected '(' after 'if'.");
+    }
+    position++; // Skip '('
+    Node conditionNode = parseExpression();
+    if (tokens[position].type != TokenType::SEPARATOR || tokens[position].value != ")") {
+        throw std::runtime_error("Expected ')' after condition.");
+    }
+    position++; // Skip ')'
 
-    // Jeśli zwracany typ to string, ustaw odpowiednią wielkość
-    if (node.children.back().token.type == TokenType::STRING) {
-        Symbol symbol = symbolTable.getSymbol("return"); // Pobierz symbol dla "return"
-        int dataSize = node.children.back().token.value.length();
-        symbolTable.updateSymbolSize("return", dataSize); // Zaktualizuj wielkość zmiennej "return"
+    if (tokens[position].type != TokenType::SEPARATOR || tokens[position].value != "{") {
+        throw std::runtime_error("Expected '{' after 'if' condition.");
+    }
+    position++; // Skip '{'
+    Node ifNode(NodeType::IF_STATEMENT, ifToken);
+    ifNode.children.push_back(conditionNode);
+    while (tokens[position].type != TokenType::SEPARATOR || tokens[position].value != "}") {
+        ifNode.children.push_back(parseStatement());
+    }
+    position++; // Skip '}'
+
+    if (position < tokens.size() && tokens[position].type == TokenType::KEYWORD && tokens[position].value == "else") {
+        Token elseToken = tokens[position];
+        position++; // Skip 'else'
+        if (tokens[position].type != TokenType::SEPARATOR || tokens[position].value != "{") {
+            throw std::runtime_error("Expected '{' after 'else'.");
+        }
+        position++; // Skip '{'
+        Node elseNode(NodeType::ELSE_STATEMENT, elseToken);
+        while (tokens[position].type != TokenType::SEPARATOR || tokens[position].value != "}") {
+            elseNode.children.push_back(parseStatement());
+            if (position == tokens.size()) {
+                throw std::runtime_error("Unexpected end of input in else block.");
+            }
+        }
+        position++; // Skip '}'
+        ifNode.children.push_back(elseNode);
+
+        // Sprawdź czy po bloku 'else' jest średnik
+        if (position < tokens.size() && tokens[position].type == TokenType::SEPARATOR && tokens[position].value == ";") {
+            position++;
+        } else {
+            throw std::runtime_error("Expected ';' after 'else' block.");
+        }
     }
 
-    return node;
+    return ifNode;
 }
 
+
+
+Node Parser::parseReturnStatement() {
+    Token returnToken = tokens[position];
+    position++; // Skip 'return'
+    Node exprNode = parseExpression();
+    Node returnNode(NodeType::RETURN_STATEMENT, returnToken);
+    returnNode.children.push_back(exprNode);
+
+    if (position < tokens.size() && tokens[position].type == TokenType::SEPARATOR && tokens[position].value == ";") {
+        position++;
+    } else {
+        throw std::runtime_error("Expected ';' after return statement.");
+    }
+
+    return returnNode;
+}

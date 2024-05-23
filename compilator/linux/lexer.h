@@ -15,19 +15,17 @@ enum class TokenType {
     CHAR,
     OPERATOR,
     SEPARATOR,
-    UNKNOWN
+    UNKNOWN,
+    WHITESPACE  // Added WHITESPACE token type
 };
 
-// Dodaj konstruktor do struktury Token
 struct Token {
     TokenType type;
     std::string value;
 
-    // Konstruktor zainicjalizujący pola typu i wartości
     Token(TokenType t, const std::string& v) : type(t), value(v) {}
 };
 
-// Dodaj definicję operatora << dla struktury Token
 inline std::ostream& operator<<(std::ostream& os, const Token& token) {
     os << "Token(";
     switch (token.type) {
@@ -38,6 +36,7 @@ inline std::ostream& operator<<(std::ostream& os, const Token& token) {
         case TokenType::CHAR: os << "CHAR"; break;
         case TokenType::OPERATOR: os << "OPERATOR"; break;
         case TokenType::SEPARATOR: os << "SEPARATOR"; break;
+        case TokenType::WHITESPACE: os << "WHITESPACE"; break;  // Added WHITESPACE
         default: os << "UNKNOWN"; break;
     }
     os << ", \"" << token.value << "\")";
@@ -58,6 +57,8 @@ private:
     Token getNextToken();
     std::string sourceCode;
     size_t position;
+    size_t lineNumber;    // Added line number
+    size_t columnNumber;  // Added column number
 };
 
 #endif // LEXER_H

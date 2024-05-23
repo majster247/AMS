@@ -9,10 +9,14 @@
 
 class SymbolTable {
 public:
-    void addSymbol(const std::string& name, SymbolType type, DataType dataType, int dataSize = 0);
+    SymbolTable();
+
+    void addSymbol(const std::string& name, SymbolType type, DataType dataType, size_t dataSize = 0);
     Symbol getSymbol(const std::string& name) const;
+    void updateSymbolSize(const std::string& name, size_t newSize);
     bool symbolExists(const std::string& name);
-    void displaySymbolTable(const SymbolTable& symbolTable); // Removed parameter, as it's not needed
+    void displaySymbolTable(const SymbolTable& symbolTable);
+    DataType getSymbolDataType(const std::string& name) const;
 
 private:
     std::unordered_map<std::string, Symbol> symbols;

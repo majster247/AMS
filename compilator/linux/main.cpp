@@ -17,14 +17,10 @@ void printSyntaxTree(const Node& node, int indent = 0) {
 
 int main() {
     std::string sourceCode = R"(
-        int main() {
             int x = 10;
-            if (x == 10) {
-                return x;
-            } else {
-                return 0;
-            }
-        }
+            int y = 20;
+            int z = x + y;
+            return z;
     )";
 
     // Tokenizacja

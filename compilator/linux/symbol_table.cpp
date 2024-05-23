@@ -37,7 +37,9 @@ std::ostream& operator<<(std::ostream& os, const DataType& type) {
 }
 
 
-void SymbolTable::addSymbol(const std::string& name, SymbolType type, DataType dataType, int dataSize) {
+SymbolTable::SymbolTable(){}
+
+void SymbolTable::addSymbol(const std::string& name, SymbolType type, DataType dataType, size_t dataSize) {
     if (symbolExists(name)) {
         throw std::runtime_error("Symbol already exists: " + name);
     }
@@ -68,7 +70,22 @@ void SymbolTable::displaySymbolTable(const SymbolTable& symbolTable) {
         std::cout << std::left << std::setw(20) << entry.first
                   << std::setw(15) << entry.second.type
                   << std::setw(15) << entry.second.dataType
-                  << std::setw(10) << entry.second.dataSize << std::endl;
+                  << std::setw(10) << entry.second.size << std::endl;
     }
 }
 
+DataType SymbolTable::getSymbolDataType(const std::string& name) const 
+{
+    auto it = symbols.find(name);
+    if (it != symbols.end()) {
+        return it->second.dataType;
+    }
+    throw std::runtime_error("Symbol not found: " + name);
+}
+
+void SymbolTable::updateSymbolSize(const std::string& name, size_t newSize) {
+    auto it = symbols.find(name);
+    if (it != symbols.end()) {
+        it->second.size = newSize;
+    }
+}

@@ -1,4 +1,5 @@
 #include "lexer.h"
+#include "debug.h"
 
 const std::unordered_map<std::string, TokenType> keywords = {
     {"auto", TokenType::KEYWORD}, {"break", TokenType::KEYWORD}, {"case", TokenType::KEYWORD},
@@ -39,7 +40,7 @@ const std::vector<TokenPattern> tokenPatterns = {
 
 
 
-Lexer::Lexer(const std::string& source) : sourceCode(source), position(0) {}
+Lexer::Lexer(const std::string& source) : sourceCode(source), position(0){}
 
 std::vector<Token> Lexer::tokenize() {
     std::vector<Token> tokens;
@@ -49,24 +50,25 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
         Token token = getNextToken();
-        if (token.type != TokenType::UNKNOWN) {
+        if (token.type != TokenType::UNKNOWN && token.type != TokenType::WHITESPACE) {  // Ignore whitespace tokens
             tokens.push_back(token);
-        } else {
-            std::cerr << "Unexpected character: " << sourceCode[position] << "\n";
-            ++position;
         }
     }
     return tokens;
 }
 
+
 Token Lexer::getNextToken() {
     std::string remainingCode = sourceCode.substr(position);
+    std::cout << "Remaining code: " << remainingCode << std::endl; // Debug print
+
 
     // Sprawdź, czy pasuje do słowa kluczowego
     std::smatch match;
     if (std::regex_search(remainingCode, match, std::regex(R"(\b[a-zA-Z_][a-zA-Z0-9_]*\b)")) && match.position() == 0) {
         std::string identifier = match.str(0);
         position += identifier.length();
+        trackDebugInfo(sourceCode, position, lineNumber, columnNumber);
         auto it = keywords.find(identifier);
         if (it != keywords.end()) {
             return {it->second, identifier};
@@ -83,6 +85,7 @@ Token Lexer::getNextToken() {
             if (pattern.type == TokenType::STRING || pattern.type == TokenType::CHAR) {
                 tokenValue = tokenValue.substr(1, tokenValue.length() - 2);
             }
+            trackDebugInfo(sourceCode, position, lineNumber, columnNumber);
             return {pattern.type, tokenValue};
         }
     }

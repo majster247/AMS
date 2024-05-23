@@ -12,6 +12,7 @@ enum class NodeType {
     VARIABLE_DECLARATION,
     ASSIGNMENT,
     IF_STATEMENT,
+    ELSE_STATEMENT,
     RETURN_STATEMENT
 };
 
@@ -42,9 +43,12 @@ public:
     Parser(const std::vector<Token>& tokens, SymbolTable& symbolTable);
     Node parse();
 
+
+
 private:
     Node parseStatement();
     Node parseExpression();
+    Node parseSimpleExpression();
     Node parseVariableDeclaration();
     Node parseAssignment();
     Node parseIfStatement();
@@ -53,6 +57,7 @@ private:
     const std::vector<Token>& tokens;
     SymbolTable& symbolTable;
     size_t position;
+
 };
 
 #endif // PARSER_H
