@@ -54,4 +54,13 @@ body {
     height: 50%;
     width: 50%;
   }
+
+  .latest-info pre{
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    margin-left: -5%;
+    font-size: 80%;
+    
+  }
   

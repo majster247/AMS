@@ -3,6 +3,8 @@ import React, { useEffect, useState } from 'react';
 import './Posts.css';
 import axios from 'axios';
 
+
+
 interface Post {
   _id: string;
   label: string;
@@ -98,6 +100,14 @@ const Posts: React.FC = () => {
 <div>
       <main>
         <h2>Latest Posts</h2>
+        <p>Dear users!
+          Welcome to our blog. Here you can find the latest news and updates about our products and services. Enjoy reading!
+          But now we are working on the implementation of the blog. Please come back later. Thank you for your understanding.
+          See you soon!
+
+          ~Majster247
+        </p>
+
         <ul id="post-list">{displayLatestPosts()}</ul>
         <div id="post-content">{getCurrentPost()}</div>
       </main>
