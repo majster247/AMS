@@ -1,34 +1,9 @@
-ENTRY(loader)
-OUTPUT_FORMAT(elf32-i386)
-OUTPUT_ARCH(i386:i386)
+ENTRY(kernel_entry)
 
-SECTIONS {
-
-	. = 0x0100000;
-
-	.text : {
-		*(.multiboot)
-		*(.text*)
-		*(.rodata)
-	}
-
-	.data : {
-	
-		start_ctors = .;
-		KEEP(*( .init_array ));
-		KEEP(*(SORT_BY_INIT_PRIORITY( .init_array.* )));
-		end_ctors = .;
-
-		*(.data)
-	}
-
-	.bss : {
-		*(.bss)
-	}
-
-
-	/DISCARD/ : {
-		*(.fini_array*)
-		*(.comment)
-	}
+SECTIONS
+{
+    . = 0x100000;      /* kernel ładowany pod 0x100000 */
+    .text : { *(.text*) }
+    .data : { *(.data*) }
+    .bss : { *(.bss*) }
 }
