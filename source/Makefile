@@ -1,34 +1,96 @@
-GPPPARAMS = -m64 -ffreestanding -fno-exceptions -fno-rtti -nostdlib -fno-builtin
-ASPARAMS  = -f bin
+# ------------------------
+# Toolchain
+# ------------------------
+ASM = nasm
+CC  = x86_64-elf-g++
+LD  = x86_64-elf-g++
+GRUB_MKRESCUE = grub-mkrescue
+QEMU = qemu-system-x86_64
 
-BOOTLOADER = obj/loader.bin
-KERNEL     = obj/kernel.o
-DISKIMG    = AMS-OS.img
+# ------------------------
+# Directories
+# ------------------------
+SRC   = src
+BUILD = build
+ISO   = iso
+ISO_DIR = $(ISO)/boot/grub
 
-all: $(DISKIMG)
+# ------------------------
+# Files
+# ------------------------
+START_OBJ   = $(BUILD)/start.o
+KERNEL_OBJ  = $(BUILD)/kernel_cpp.o
+KERNEL_ELF  = $(BUILD)/kernel.elf
+GRUB_CFG    = $(ISO_DIR)/grub.cfg
 
-# Kompilacja kernel.cpp
-obj/%.o: src/%.cpp
-	mkdir -p $(@D)
-	g++ $(GPPPARAMS) -c $< -o $@
+# ------------------------
+# Default target
+# ------------------------
+all: run
 
-# Kompilacja bootloader.s
-obj/%.bin: src/%.s
-	mkdir -p $(@D)
-	nasm $(ASPARAMS) $< -o $@
+# ------------------------
+# Create build and ISO directories
+# ------------------------
+$(BUILD):
+	mkdir -p $@
 
-# Tworzenie minimalnego obrazu dysku 2MB
-$(DISKIMG): $(BOOTLOADER) $(KERNEL)
-	# 2MB = 4096 * 512B sektory
-	dd if=/dev/zero of=$(DISKIMG) bs=512 count=4096 status=none
-	# Bootloader na sektor 0
-	dd if=$(BOOTLOADER) of=$(DISKIMG) bs=512 count=1 conv=notrunc status=none
-	# Kernel zaczyna od sektora 1
-	dd if=$(KERNEL) of=$(DISKIMG) bs=512 seek=1 conv=notrunc status=none
+$(ISO_DIR):
+	mkdir -p $@
 
-run: $(DISKIMG)
-	qemu-system-x86_64 -drive format=raw,file=$(DISKIMG)
+# ------------------------
+# Compile kernel.cpp
+# ------------------------
+$(KERNEL_OBJ): $(SRC)/kernel.cpp | $(BUILD)
+	$(CC) -m64 -ffreestanding -O2 -Wall -Wextra -c $< -o $@
 
-.PHONY: clean
+# ------------------------
+# Assemble start.s
+# ------------------------
+$(START_OBJ): $(SRC)/start.s | $(BUILD)
+	$(ASM) -f elf64 $< -o $@
+
+# ------------------------
+# Link kernel + start.o into ELF
+# ------------------------
+$(KERNEL_ELF): $(START_OBJ) $(KERNEL_OBJ)
+	$(LD) -m64 -ffreestanding -O2 -nostdlib -T linker.ld $(START_OBJ) $(KERNEL_OBJ) -o $@
+
+# ------------------------
+# Copy kernel ELF into ISO
+# ------------------------
+$(ISO)/boot/kernel.elf: $(KERNEL_ELF) | $(ISO_DIR)
+	cp $< $@
+
+# ------------------------
+# Generate grub.cfg
+# ------------------------
+$(GRUB_CFG): | $(ISO_DIR)
+	echo 'set timeout=0' > $@
+	echo 'set default=0' >> $@
+	echo 'menuentry "64-bit Kernel" {' >> $@
+	echo '    multiboot2 /boot/kernel.elf' >> $@
+	echo '    boot' >> $@
+	echo '}' >> $@
+
+# ------------------------
+# Build ISO
+# ------------------------
+iso: $(ISO)/boot/kernel.elf $(GRUB_CFG)
+	grub-mkrescue -o $(BUILD)/AMS.iso iso --modules="biosdisk part_msdos multiboot"
+
+# ------------------------
+# Run in QEMU
+# ------------------------
+run: iso
+	$(QEMU) -cdrom $(BUILD)/AMS.iso -boot d -serial stdio
+
+# ------------------------
+# Clean build artifacts
+# ------------------------
 clean:
-	rm -rf obj $(DISKIMG)
+	rm -rf $(BUILD) $(ISO)
+
+# ------------------------
+# Rebuild and run
+# ------------------------
+rebuild: clean run
