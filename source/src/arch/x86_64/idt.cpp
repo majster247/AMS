@@ -20,17 +20,28 @@ extern "C" void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags) {
     idt[vector].reserved = 0;
 }
 
+extern "C" void exception_handler() {
+    // Wypisz coś bezpośrednio na port szeregowy, omijając przerwania
+    outb(0x3F8, 'C');
+    outb(0x3F8, 'R');
+    outb(0x3F8, 'A');
+    outb(0x3F8, 'S');
+    outb(0x3F8, 'H');
+    while(1); // Zatrzymaj system, żebyś widział log w konsoli
+}
+
+
 void pic_remap() {
-    outb(0x20, 0x11);
+    outb(0x20, 0x11); // ICW1_INIT | ICW1_ICW4
     outb(0xA0, 0x11);
-    outb(0x21, 0x20); // Mapowanie Master PIC na 0x20 (32)
-    outb(0xA1, 0x28); // Mapowanie Slave PIC na 0x28 (40)
+    outb(0x21, 0x20); // Master PIC offset (wektory 32-39)
+    outb(0xA1, 0x28); // Slave PIC offset (wektory 40-47)
     outb(0x21, 0x04);
     outb(0xA1, 0x02);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
-    outb(0x21, 0xFC); // Maskowanie: 11111100 (odblokowane IRQ0 - timer i IRQ1 - klawiatura)
-    outb(0xA1, 0xFF); // Wszystko zablokowane na Slave
+    outb(0x21, 0xFC);  // Odmaskuj wszystko (na razie)
+    outb(0xA1, 0xFF);
 }
 
 extern "C" void timer_handler_stub();
@@ -40,12 +51,14 @@ extern "C" void idt_init() {
     for(int i = 0; i < 256; i++) {
         idt_set_descriptor(i, (void*)isr_ignore_stub, 0x8E);
     }
+     // Remap PIC
+    pic_remap();
 
     // 1. Zarejestruj Timer (IRQ 0 -> wektor 32 czyli 0x20)
     idt_set_descriptor(32, (void*)timer_handler_stub, 0x8E);
 
     // 2. Klawiatura (IRQ 1 -> 33)
-    idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
+    idt_set_descriptor(0x21, (void*)isr_keyboard_stub, 0x8E);
 
     // 3. Popraw maskowanie w pic_remap lub tutaj:
     // 0xFC = 11111100 (odblokowane IRQ0 - timer i IRQ1 - klawiatura)
@@ -55,15 +68,17 @@ extern "C" void idt_init() {
     // 2. Ustaw konkretnie klawiaturę (IRQ 1 -> 33)
     idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
 
-    // 3. Remap PIC
-    pic_remap();
-
+    // 3. Ustaw timer (IRQ 0 -> 32)
     idt_set_descriptor(32, (void*)timer_handler_stub, 0x8E);
+
+    // Zarejestruj handler dla GPF (13) i Page Fault (14)
+    idt_set_descriptor(13, (void*)exception_handler, 0x8E);
+    idt_set_descriptor(14, (void*)exception_handler, 0x8E);
 
     // 4. Załaduj IDT
     _idtr.base = (uintptr_t)&idt[0];
     _idtr.limit = (uint16_t)sizeof(idt_entry) * 256 - 1;
 
     asm volatile ("lidt %0" : : "m"(_idtr));
-    asm volatile ("sti");
 }
+

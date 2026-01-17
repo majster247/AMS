@@ -1,7 +1,9 @@
-#include "../include/kernel.h" // Upewnij się, że ścieżki include są poprawne
+#include "kernel.h"
 #include <stdint.h>
 
-// Struktury Multiboot2 (uproszczone dla czytelności)
+// Globalna zmienna, w której zapiszemy adres naszego systemu plików
+uint64_t initrd_addr = 0;
+
 struct multiboot_tag {
     uint32_t type;
     uint32_t size;
@@ -22,50 +24,63 @@ struct multiboot_tag_mmap {
     struct multiboot_mmap_entry entries[];
 };
 
+// --- NOWA STRUKTURA DLA MODUŁÓW (INITRD) ---
+struct multiboot_tag_module {
+    uint32_t type;
+    uint32_t size;
+    uint32_t mod_start; // Adres fizyczny początku modułu
+    uint32_t mod_end;   // Adres fizyczny końca modułu
+    char cmdline[];     // Opcjonalna linia komend
+};
+
+extern "C" void pmm_mark_free(uint64_t start, uint64_t size);
 
 extern "C" void parse_multiboot(uint64_t addr) {
     write_serial_string("[MEM] Parsing Multiboot2 info...\n");
 
-    // Pierwsze 8 bajtów to całkowity rozmiar struktury
     uint32_t total_size = *(uint32_t*)addr;
-    
-    // Wskaźnik na pierwszy tag (pomijamy 8 bajtów nagłówka)
     uint8_t* tag_ptr = (uint8_t*)(addr + 8);
 
     while (tag_ptr < (uint8_t*)(addr + total_size)) {
         multiboot_tag* tag = (multiboot_tag*)tag_ptr;
 
-        if (tag->type == 0) { // Tag kończący
-            break;
+        if (tag->type == 0) break;
+
+        // TAG TYPU 3: Moduł (nasz Initrd)
+        if (tag->type == 3) {
+            multiboot_tag_module* mod = (multiboot_tag_module*)tag;
+            write_serial_string("[VFS] Znaleziono modul pod adresem: ");
+            write_serial_hex(mod->mod_start);
+            write_serial_string("\n");
+            
+            initrd_addr = mod->mod_start;
         }
 
-        if (tag->type == 6) { // Tag Mapy Pamięci (Memory Map)
-            write_serial_string("[MEM] Found Memory Map:\n");
-            
+        // TAG TYPU 6: Mapa pamięci
+        if (tag->type == 6) {
             multiboot_tag_mmap* mmap = (multiboot_tag_mmap*)tag;
             uint32_t num_entries = (mmap->size - 16) / mmap->entry_size;
 
             for (uint32_t i = 0; i < num_entries; i++) {
-                multiboot_mmap_entry* entry = (multiboot_mmap_entry*)((uint64_t)mmap->entries + (i * mmap->entry_size));
-                
-                // Wypisz szczegóły każdego regionu
-                write_serial_string("   Region: Start=");
-                write_serial_string(to_hex(entry->addr));
-                write_serial_string(" Len=");
-                write_serial_string(to_hex(entry->len));
-                write_serial_string(" Type=");
+                multiboot_mmap_entry* entry = (multiboot_mmap_entry*)((uint8_t*)mmap->entries + (i * mmap->entry_size));
                 
                 if (entry->type == 1) { // AVAILABLE
-                    write_serial_string("AVAILABLE\n");
-                    pmm_mark_free(entry->addr, entry->len);
-                } else {
-                    write_serial_string("RESERVED\n");
+                    uint64_t start = entry->addr;
+                    uint64_t length = entry->len;
+
+                    if (start < 0x100000) {
+                        uint64_t end = start + length;
+                        if (end <= 0x100000) continue;
+                        start = 0x100000;
+                        length = end - 0x100000;
+                    }
+                    pmm_mark_free(start, length);
                 }
             }
         }
 
-        // Przejdź do następnego taga (wyrównanie do 8 bajtów)
-        tag_ptr += ((tag->size + 7) & ~7);
+        tag_ptr += (tag->size + 7) & ~7;
     }
+
     write_serial_string("[MEM] Parsing finished.\n");
 }

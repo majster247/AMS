@@ -18,6 +18,7 @@ extern "C" {
     int init_serial();
     void write_serial(char a);
     void write_serial_string(const char* str);
+    void write_serial_hex(uint64_t val);
     const char* to_hex(uint64_t val);
 
     void parse_multiboot(uint64_t addr);
@@ -30,5 +31,9 @@ extern "C" {
     void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags);
 
     void* kmalloc(size_t size);
+
+    int strcmp(const char* s1, const char* s2);
+    int strncmp(const char* s1, const char* s2, size_t n);
+    
 
 }

@@ -82,3 +82,4 @@ extern "C" void terminal_writestring(const char* data) {
     for (size_t i = 0; data[i] != '\0'; i++)
         terminal_putchar(data[i]);
 }
+

@@ -2,9 +2,8 @@
 extern schedule
 global timer_handler_stub
 
+; interrupts.s
 timer_handler_stub:
-    ; Zgodnie ze strukturą registers w task.h: 
-    ; r15, r14, r13, r12, r11, r10, r9, r8, rbp, rdi, rsi, rdx, rcx, rbx, rax
     push rax
     push rbx
     push rcx
@@ -21,15 +20,11 @@ timer_handler_stub:
     push r14
     push r15
 
-    mov rdi, rsp            ; Przekazujemy wskaźnik na registers*
+    mov rdi, rsp    ; Przekaż RSP do schedulera
     call schedule
-    mov rsp, rax            ; Przełączamy stos na ten zwrócony przez scheduler
+    mov rsp, rax    ; Zmień RSP na ten zwrócony przez scheduler
 
-    ; Wyślij EOI do PIC (Inaczej dostaniesz tylko jedno przerwanie!)
-    mov al, 0x20
-    out 0x20, al
-
-    pop r15
+    pop r15         ; Popujemy w odwrotnej kolejności!
     pop r14
     pop r13
     pop r12
@@ -44,4 +39,4 @@ timer_handler_stub:
     pop rcx
     pop rbx
     pop rax
-    iretq                   ; Powrót z przerwania (zdejmuje RIP, CS, RFLAGS, RSP, SS)
+    iretq           ; Tu dzieje się magia przełączania RIP i RSP
