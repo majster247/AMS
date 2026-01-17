@@ -1,46 +1,42 @@
-// src/kernel.cpp
-extern "C" void kmain();
+#include "kernel.h"
+#include "vmm.h"
+#include "task.h"
+#include "io.h"
 
-#include <stdint.h>
-#include <stddef.h>
-
-static constexpr uint16_t VGA_WIDTH = 80;
-static constexpr uint16_t VGA_HEIGHT = 25;
-static uint16_t* const VGA_BUFFER = reinterpret_cast<uint16_t*>(0xB8000);
-
-enum class VGAColor : uint8_t { Black, Blue, Green, Cyan, Red, Magenta, Brown, LightGrey };
-
-inline uint8_t vga_entry_color(VGAColor fg, VGAColor bg) { return uint8_t(fg) | (uint8_t(bg)<<4); }
-inline uint16_t vga_entry(char c, uint8_t color) { return uint16_t(c) | (uint16_t(color)<<8); }
-
-size_t terminal_row = 0;
-size_t terminal_column = 0;
-uint8_t terminal_color;
-uint16_t* terminal_buffer;
-
-extern "C" void terminal_initialize() {
-    terminal_row = 0;
-    terminal_column = 0;
-    terminal_color = vga_entry_color(VGAColor::LightGrey, VGAColor::Black);
-    terminal_buffer = VGA_BUFFER;
-    for(size_t y=0;y<VGA_HEIGHT;y++)
-        for(size_t x=0;x<VGA_WIDTH;x++)
-            terminal_buffer[y*VGA_WIDTH+x] = vga_entry(' ', terminal_color);
+void second_task() {
+    while(1) {
+        write_serial_string("[TASK 2] Działam równolegle!\n");
+        // Tu można by dodać mały delay
+        for(volatile int i = 0; i < 1000000; i++); 
+    }
 }
 
-extern "C" void terminal_putchar(char c) {
-    if(c=='\n'){terminal_column=0; terminal_row++; return;}
-    terminal_buffer[terminal_row*VGA_WIDTH+terminal_column] = vga_entry(c,terminal_color);
-    terminal_column++;
-    if(terminal_column>=VGA_WIDTH){terminal_column=0; terminal_row++;}
+void pit_init(uint32_t frequency) {
+    uint32_t divisor = 1193180 / frequency;
+    outb(0x43, 0x36);             // Command port: Mode 3 (Square wave)
+    outb(0x40, (uint8_t)(divisor & 0xFF));        // Low byte
+    outb(0x40, (uint8_t)((divisor >> 8) & 0xFF)); // High byte
 }
 
-extern "C" void terminal_writestring(const char* str){
-    for(size_t i=0;str[i];i++) terminal_putchar(str[i]);
-}
 
-extern "C" void kmain() {
+extern "C" void kmain(uint64_t multiboot_info_address) {
+    init_serial();
     terminal_initialize();
-    terminal_writestring("Hello, 64-bit kernel is alive!\n");
-    while(1){ asm volatile("hlt"); }
+
+    // 1. Pamięć najpierw (żeby stos i IDT miały gdzie żyć)
+    pmm_init(128 * 1024 * 1024, (void*)0x200000);
+    parse_multiboot(multiboot_info_address);
+    
+    // 2. IDT (teraz bezpiecznie)
+    idt_init();
+
+    write_serial_string("Inicjalizacja zadań...\n");
+    task* t1 = create_task(nullptr); 
+    task* t2 = create_task(second_task);
+    pit_init(100); // 100 Hz timer
+    write_serial_string("Włączam przerwania (sti)...\n");
+    asm volatile("sti");
+    
+    terminal_writestring("System started and multitasking active!\n");
+    while(1) { asm("hlt"); }
 }

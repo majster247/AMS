@@ -4,11 +4,30 @@ SECTIONS
 {
     . = 1M;
 
-    .multiboot ALIGN(8) : { KEEP(*(.multiboot)) }
+    /* To musi być PIERWSZA sekcja w pliku */
+    .boot : 
+    {
+        KEEP(*(.multiboot))
+    }
 
-    .text ALIGN(8) : { *(.text) }
+    .text : ALIGN(4K)
+    {
+        *(.text)
+    }
 
-    .rodata ALIGN(8) : { *(.rodata) }
+    .rodata : ALIGN(4K)
+    {
+        *(.rodata*)
+    }
 
-    .bss ALIGN(8) : { *(.bss) *(COMMON) }
+    .data : ALIGN(4K)
+    {
+        *(.data)
+    }
+
+    .bss : ALIGN(4K)
+    {
+        *(COMMON)
+        *(.bss)
+    }
 }

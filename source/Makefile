@@ -1,96 +1,51 @@
-# ------------------------
-# Toolchain
-# ------------------------
-ASM = nasm
-CC  = x86_64-elf-g++
-LD  = x86_64-elf-g++
-GRUB_MKRESCUE = grub-mkrescue
-QEMU = qemu-system-x86_64
+CC = x86_64-elf-g++
+AS = nasm
+LD = x86_64-elf-ld
 
-# ------------------------
-# Directories
-# ------------------------
-SRC   = src
-BUILD = build
-ISO   = iso
-ISO_DIR = $(ISO)/boot/grub
+CFLAGS = -m64 -ffreestanding -O2 -Wall -Wextra -Iinclude \
+         -fno-exceptions -fno-rtti -mno-red-zone -mno-mmx -mno-sse -mno-sse2
+ASFLAGS = -f elf64
+LDFLAGS = -n -T linker.ld
 
-# ------------------------
-# Files
-# ------------------------
-START_OBJ   = $(BUILD)/start.o
-KERNEL_OBJ  = $(BUILD)/kernel_cpp.o
-KERNEL_ELF  = $(BUILD)/kernel.elf
-GRUB_CFG    = $(ISO_DIR)/grub.cfg
+# Dodajemy interrupts.s do listy źródeł (załóżmy, że jest w src/tasking/)
+SRCS = src/kernel.cpp src/arch/x86_64/idt.cpp src/drivers/keyboard.cpp \
+       src/drivers/vga.cpp src/drivers/serial.cpp src/memory/multiboot_parser.cpp \
+	   src/memory/pmm.cpp src/utils.cpp src/memory/vmm.cpp src/memory/heap.cpp \
+       src/tasking/scheduler.cpp
 
-# ------------------------
-# Default target
-# ------------------------
-all: run
+# Automatyczne generowanie listy plików .o dla .cpp i .s
+OBJS = build/start.o \
+       build/tasking/interrupts.o \
+       $(patsubst src/%.cpp, build/%.o, $(SRCS))
 
-# ------------------------
-# Create build and ISO directories
-# ------------------------
-$(BUILD):
-	mkdir -p $@
+all: myos.iso
 
-$(ISO_DIR):
-	mkdir -p $@
+# Reguła dla plików C++
+build/%.o: src/%.cpp
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# ------------------------
-# Compile kernel.cpp
-# ------------------------
-$(KERNEL_OBJ): $(SRC)/kernel.cpp | $(BUILD)
-	$(CC) -m64 -ffreestanding -O2 -Wall -Wextra -c $< -o $@
+# Poprawiona reguła dla plików asemblera (obsługuje start.s i interrupts.s)
+build/%.o: src/%.s
+	@mkdir -p $(@D)
+	$(AS) $(ASFLAGS) $< -o $@
 
-# ------------------------
-# Assemble start.s
-# ------------------------
-$(START_OBJ): $(SRC)/start.s | $(BUILD)
-	$(ASM) -f elf64 $< -o $@
+# Specyficzna reguła dla start.o jeśli jest bezpośrednio w src/
+build/start.o: src/start.s
+	@mkdir -p build
+	$(AS) $(ASFLAGS) $< -o $@
 
-# ------------------------
-# Link kernel + start.o into ELF
-# ------------------------
-$(KERNEL_ELF): $(START_OBJ) $(KERNEL_OBJ)
-	$(LD) -m64 -ffreestanding -O2 -nostdlib -T linker.ld $(START_OBJ) $(KERNEL_OBJ) -o $@
+kernel.elf: $(OBJS)
+	$(LD) $(LDFLAGS) $(OBJS) -o $@
 
-# ------------------------
-# Copy kernel ELF into ISO
-# ------------------------
-$(ISO)/boot/kernel.elf: $(KERNEL_ELF) | $(ISO_DIR)
-	cp $< $@
+myos.iso: kernel.elf
+	mkdir -p iso/boot/grub
+	cp kernel.elf iso/boot/
+	printf 'set timeout=0\nset default=0\nmenuentry "MyOS" {\n multiboot2 /boot/kernel.elf\n boot\n}' > iso/boot/grub/grub.cfg
+	grub-mkrescue -o myos.iso iso
 
-# ------------------------
-# Generate grub.cfg
-# ------------------------
-$(GRUB_CFG): | $(ISO_DIR)
-	echo 'set timeout=0' > $@
-	echo 'set default=0' >> $@
-	echo 'menuentry "64-bit Kernel" {' >> $@
-	echo '    multiboot2 /boot/kernel.elf' >> $@
-	echo '    boot' >> $@
-	echo '}' >> $@
+run: all
+	qemu-system-x86_64 -cdrom myos.iso -serial stdio -d int -no-reboot -no-shutdown
 
-# ------------------------
-# Build ISO
-# ------------------------
-iso: $(ISO)/boot/kernel.elf $(GRUB_CFG)
-	grub-mkrescue -o $(BUILD)/AMS.iso iso --modules="biosdisk part_msdos multiboot"
-
-# ------------------------
-# Run in QEMU
-# ------------------------
-run: iso
-	$(QEMU) -cdrom $(BUILD)/AMS.iso -boot d -serial stdio
-
-# ------------------------
-# Clean build artifacts
-# ------------------------
 clean:
-	rm -rf $(BUILD) $(ISO)
-
-# ------------------------
-# Rebuild and run
-# ------------------------
-rebuild: clean run
+	rm -rf build iso myos.iso kernel.elf
