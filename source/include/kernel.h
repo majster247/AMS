@@ -19,6 +19,7 @@ extern "C" {
     void write_serial(char a);
     void write_serial_string(const char* str);
     void write_serial_hex(uint64_t val);
+    void write_serial_char(char c);
     const char* to_hex(uint64_t val);
 
     void parse_multiboot(uint64_t addr);
@@ -35,5 +36,6 @@ extern "C" {
     int strcmp(const char* s1, const char* s2);
     int strncmp(const char* s1, const char* s2, size_t n);
     
-
+    void* memset(void* dest, int ch, size_t count);
+    void* memcpy(void* dest, const void* src, size_t count);
 }

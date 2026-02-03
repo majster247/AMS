@@ -14,34 +14,47 @@ static char scancode_to_ascii[] = {
     'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
 };
 
-char cmd_buffer[128];
-int cmd_index = 0;
-bool line_ready = false;
+volatile char cmd_buffer[128];
+volatile int cmd_index = 0;
+volatile bool line_ready = false;
 
 extern "C" void keyboard_handler() {
     uint8_t scancode = inb(0x60);
     
-    // Zmieniamy kolor tła drugiego znaku na ekranie przy każdym IRQ
-    *((uint8_t*)0xB8003) = *((uint8_t*)0xB8003) + 1;
+    // Debug wizualny (niebieski kwadracik) - zostawiamy
+    *((uint8_t*)0xB8001) = *((uint8_t*)0xB8001) + 1;
 
     if (scancode < 0x80) {
         char c = scancode_to_ascii[scancode];
-        if (c != 0) {
-            // WYŚLIJ NA SERIAL - to zawsze działa, niezależnie od VGA
-            outb(0x3F8, c); 
-
-            // Jeśli masz terminal_putchar, użyj go:
-            terminal_putchar(c); 
-
-            if (c == '\n') {
-                cmd_buffer[cmd_index] = '\0';
-                line_ready = true;
-            } else if (cmd_index < 127) {
-                cmd_buffer[cmd_index++] = c;
+        
+        if (c == '\n') {
+            line_ready = true;
+            terminal_putchar('\n');
+            // Opcjonalnie: debug na serial
+            write_serial_string("\n[KEY] Enter pressed\n");
+        } 
+        else if (c == '\b') {
+            if (cmd_index > 0) {
+                // Usuwamy ze zmiennych volatile
+                int idx = cmd_index - 1;
+                cmd_buffer[idx] = '\0';
+                cmd_index = idx;
+                terminal_putchar('\b');
+            }
+        } 
+        else if (c != 0) { // Zabezpieczenie przed pustymi znakami
+            if (cmd_index < 127) {
+                int idx = cmd_index;
+                cmd_buffer[idx] = c;
+                cmd_buffer[idx + 1] = '\0';
+                cmd_index = idx + 1;
+                write_serial_string(&c); // Opcjonalnie: debug na serial
+                terminal_putchar(c); // ECHO na ekran
             }
         }
     }
-    outb(0x20, 0x20);
+    
+    outb(0x20, 0x20); // EOI
 }
 
 extern "C" void keyboard_init() {

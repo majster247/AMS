@@ -22,9 +22,14 @@ extern "C" void write_serial_hex(uint64_t val) {
     write_serial_string(hex_str);
 }
 
+extern "C" void write_serial_char(char c) {
+    write_serial(c);
+}
+
 int strcmp(const char* s1, const char* s2) {
     while (*s1 && (*s1 == *s2)) {
-        s1++; s2++;
+        s1++;
+        s2++;
     }
     return *(unsigned char*)s1 - *(unsigned char*)s2;
 }
@@ -35,4 +40,21 @@ int strncmp(const char* s1, const char* s2, size_t n) {
     }
     if (n == 0) return 0;
     return *(unsigned char*)s1 - *(unsigned char*)s2;
+}
+
+extern "C" void* memset(void* dest, int ch, size_t count) {
+    uint8_t* p = (uint8_t*)dest;
+    while (count--) {
+        *p++ = (uint8_t)ch;
+    }
+    return dest;
+}
+
+extern "C" void* memcpy(void* dest, const void* src, size_t count) {
+    uint8_t* d = (uint8_t*)dest;
+    const uint8_t* s = (const uint8_t*)src;
+    while (count--) {
+        *d++ = *s++;
+    }
+    return dest;
 }

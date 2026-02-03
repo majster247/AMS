@@ -26,3 +26,4 @@ extern "C" void* kmalloc(size_t size) {
     heap_current += size;
     return ptr;
 }
+

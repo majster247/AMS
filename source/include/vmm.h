@@ -7,3 +7,4 @@
 #define PAGE_USER     (1ULL << 2)
 
 extern "C" void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags);
+extern "C" uint64_t vmm_get_phys(uint64_t virtual_addr);

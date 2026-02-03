@@ -4,134 +4,138 @@
 #include "io.h"
 #include "tar.h"
 #include "vfs.h"
+#include "shell.h"
+#include "pci.h"
+#include "ahci.h"
 
-// Zapowiedź funkcji z idt.cpp
-extern "C" void idt_set_descriptor(uint8_t vector, void* isr, uint8_t flags);
 
-// Zapowiedź symbolu z interrupts.s (asemblera)
-extern "C" void isr_keyboard_stub();
 
-extern uint64_t initrd_addr; // Zmienna z multiboot_parser.cpp
 
-extern "C" void second_task() {
-    while(1) {
-        // Piszemy bezpośrednio do portu szeregowego bez zbędnych funkcji
-        outb(0x3F8, 'B'); 
-        // Bardzo długa pętla, żebyś zauważył literki
-        for(volatile uint64_t i = 0; i < 10000000; i++); 
+// Zewnętrzne inicjalizatory
+extern "C" void pci_init(); 
+extern uint64_t initrd_addr;
+extern ahci_port* sata_port; // Globalny wskaźnik na pierwszy znaleziony port SATA (do testów)
+extern uint64_t bitmap_size; // Informujemy linker, że to jest w pmm.cpp
+
+
+void log_step(const char* msg, uint64_t addr = 0) {
+    write_serial_string("[KERNEL] ");
+    write_serial_string(msg);
+    if (addr != 0) {
+        write_serial_string(" -> Adres: ");
+        write_serial_hex(addr);
     }
+    write_serial_string("\n");
 }
-
-void vga_matrix_effect() {
-    uint16_t* vga = (uint16_t*)0xB8000;
-    for(int i = 0; i < 80 * 25; i++) {
-        uint8_t character = 33 + (i % 94); // Losowe znaki ASCII
-        uint8_t color = (i % 15) + 1;
-        vga[i] = (uint16_t)character | (uint16_t)(color << 8);
-    }
-}
-
-void run_shell() {
-    extern char cmd_buffer[];
-    extern bool line_ready;
-    extern int cmd_index;
-
-    terminal_writestring("\nAMS-1 Shell> ");
-
-    while (true) {
-        if (line_ready) {
-            if (strcmp(cmd_buffer, "ls") == 0) {
-                vfs_node* curr = vfs_root;
-                while (curr) {
-                    terminal_writestring(curr->name);
-                    terminal_writestring("  ");
-                    curr = curr->next;
-                }
-                terminal_writestring("\n");
-            } 
-            else if (strncmp(cmd_buffer, "cat ", 4) == 0) {
-                const char* filename = cmd_buffer + 4;
-                vfs_node* file = vfs_find(filename);
-                if (file) {
-                    uint8_t buf[1024];
-                    uint32_t n = file->read(file, 0, file->size, buf);
-                    for(uint32_t i=0; i<n; i++) terminal_writestring((char[]){(char)buf[i], '\0'});
-                    terminal_writestring("\n");
-                } else {
-                    terminal_writestring("File not found.\n");
-                }
-            }
-            else if (strcmp(cmd_buffer, "help") == 0) {
-                terminal_writestring("Dostepne komendy: ls, cat <file>, help, clear\n");
-            }
-
-            // Reset bufora
-            cmd_index = 0;
-            line_ready = false;
-            terminal_writestring("AMS-1 Shell> ");
-        }
-        
-        // Tutaj procesor może odpocząć, żeby nie palić 100% CPU w QEMU
-        //asm volatile("hlt"); 
-    }
-}
-
-
-
-void pit_init(uint32_t frequency) {
-    uint32_t divisor = 1193180 / frequency;
-    outb(0x43, 0x36);             // Command port: Mode 3 (Square wave)
-    outb(0x40, (uint8_t)(divisor & 0xFF));        // Low byte
-    outb(0x40, (uint8_t)((divisor >> 8) & 0xFF)); // High byte
-}
-
 
 extern "C" void kmain(uint64_t multiboot_info_address) {
     init_serial();
+    log_step("=== AMS OS x64 Startuje ===");
+    log_step("Multiboot Info", multiboot_info_address);
+
     terminal_initialize();
-    write_serial_string("AMSx64 v04.5 booting...\n");
-    // 1. Pamięć najpierw (żeby stos i IDT miały gdzie żyć)
-    pmm_init(128 * 1024 * 1024, (void*)0x200000);
+    terminal_writestring("AMS OS x64 Booting...\n");
+
+    // 1. Pamięć Fizyczna
+    pmm_init(128 * 1024 * 1024, (void*)0x200000); // 128MB RAM, bitmapa pod 2MB
+    log_step("PMM Zainicjalizowany");
+
+    // 2. Parsowanie Multiboota (pobieranie mapy RAM i modułów)
     parse_multiboot(multiboot_info_address);
+    log_step("Multiboot sparsowany, Initrd pod", initrd_addr);
 
-    //Oznaczenie pamięci jądra i bitmapy jako zajętej (pierwsze 4MB)
-    pmm_mark_used(0x0, 0x400000);
+    // 3. Rezerwacja pamięci jądra
+    pmm_mark_used(0x0, 0x1000000); // Rezerwujemy pierwsze 16MB dla jądra i urządzeń
+    log_step("Pamięć jądra zarezerwowana (0-16MB)");
+
     
-    // 2. IDT (teraz bezpiecznie)
-    idt_init();
+    // 4. REZERWACJA BITMAPY I MODUŁÓW
+    log_step("Rezerwacja bitmapy PMM i modułów (initrd)");
+    // Musisz też oznaczyć adres bitmapy (0x200000) jako zajęty, żeby PMM sam siebie nie nadpisał!
+    pmm_mark_used(0x200000, bitmap_size);
+    pmm_mark_used(initrd_addr, 0x100000); // Przykładowe 1MB na initrd
 
-    /*write_serial_string("Inicjalizacja zadań...\n");
-    create_task(nullptr);      // Zadanie 1 (jądro)
-    create_task(second_task);  // Zadanie 2
-    pit_init(100); // 100 Hz timer
-    */
-    write_serial_string("Włączam przerwania (sti)...\n");
+
+    // 4. Przerwania
+    idt_init();
+    keyboard_init();
+    log_step("IDT i Klawiatura gotowe");
+
+    log_step("Włączam przerwania (sti)");
     asm volatile("sti");
 
-    write_serial_string("Inicjalizacja VFS...\n");
-    vfs_init(); // Buduje strukturę plików
-    write_serial_string("Sprawdzam plik hello.txt w VFS...\n");
+    // 5. System Plików VFS (TarFS na start)
+    vfs_init();
+    log_step("VFS Zainicjalizowany (TarFS)");
 
-    vfs_node* file = vfs_find("hello.txt");
-    if (file) {
-        uint8_t buffer[64];
-        file->read(file, 0, 63, buffer);
+    // 6. Magistrala PCI i Sterowniki (Tu znajdziemy SATA/AHCI)
+    log_step("Rozpoczynam skanowanie PCI...");
+    pci_init(); 
+
+    log_step("Skanowanie PCI zakończone");
+    // Test odczytu z dysku SATA (jeśli znaleziono port)
+    log_step("Test odczytu z dysku SATA (jeśli dostępny)");
     
-        // Piszemy bezpośrednio do pamięci VGA (drugi wiersz, żeby nie zniknęło)
-        uint16_t* vga = (uint16_t*)0xB8000 + 80; 
-        for(int i = 0; buffer[i] != '\0' && i < 64; i++) {
-            vga[i] = (uint16_t)buffer[i] | (uint16_t)(0x0F << 8);
-        }
+    void* test_buffer_phys = pmm_alloc_frame(); // Dostajesz adres fizyczny, np. 0x500000
+    ahci_read(sata_port, 0, 1, (uint16_t*)test_buffer_phys);
+    // Teraz możesz zmapować ten adres fizyczny do przestrzeni wirtualnej, jeśli chcesz go odczytać w kernelu
+    vmm_map(0xFFFF800000000000, (uint64_t)test_buffer_phys, PAGE_PRESENT | PAGE_WRITABLE);
+    write_serial_string("[KERNEL] Odczytano sektor 0 z SATA! Zawartość (pierwsze 16 bajtów): ");
+    uint16_t* disk_data = (uint16_t*)0xFFFF800000000000;
+    char* text_data = (char*)disk_data;
+    for(int i=0; i<32; i++) {
+        write_serial_char(text_data[i]);
     }
-    
-    terminal_writestring("System started and multitasking active!\n");
-    //vga_matrix_effect();
-    keyboard_init();
-    run_shell();
+    write_serial_string("\n");
 
+    if (sata_port) {
+    uint8_t* disk_buffer = (uint8_t*)kmalloc(512); // rzutujemy na bajty
+    if (ahci_read(sata_port, 0, 1, (uint16_t*)disk_buffer)) {
+        write_serial_string("[KERNEL] Odczytano tekst z SATA: ");
+        for(int i = 0; i < 32; i++) {
+            // Wypisujemy znak po znaku (zakładając, że masz funkcję serial_putc)
+            // Jeśli nie masz, użyj tymczasowo write_serial_string z pojedynczym znakiem
+            char c = (char)disk_buffer[i];
+            if(c >= 32 && c <= 126) { // tylko znaki drukowalne
+                write_serial_char(c);
+            }
+        }
+        write_serial_string("\n");
+    }
+    }
+
+    //Test zapisu na dysk SATA (jeśli znaleziono port)
+    log_step("Test zapisu na dysku SATA (jeśli dostępny)");
+
+    const char* msg = "AMS OS TEST ZAPISU";
+    uint8_t* my_buffer = (uint8_t*)kmalloc(512);
+    memset(my_buffer, 0, 512);
+    memcpy(my_buffer, msg, 18);
+
+    // 1. Zapisujemy na sektorze 10 (bezpiecznie poza MBR)
+    if(ahci_write(sata_port, 10, 1, (uint16_t*)my_buffer)) {
+        write_serial_string("[KERNEL] Zapisano sektor 10!\n");
+    }
+
+    // 2. Czyścimy bufor, żeby mieć pewność, że czytamy z dysku, a nie z RAMu
+    memset(my_buffer, 0, 512);
+
+    // 3. Czytamy z powrotem
+    if(ahci_read(sata_port, 10, 1, (uint16_t*)my_buffer)) {
+        write_serial_string("[KERNEL] Odczyt po zapisie: ");
+        write_serial_string((char*)my_buffer);
+        write_serial_string("\n");
+    }
+
+    
+
+
+    // 7. Shell
+    log_step("Uruchamiam Shell użytkownika");
+    terminal_writestring("Welcome to AMS OS!\n");
+    shell_init();
 
     while(1) {
-        //write_serial_string("A");
-        for(volatile int i = 0; i < 1000000; i++);
+        shell_update();
     }
 }

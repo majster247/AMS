@@ -40,7 +40,7 @@ void pic_remap() {
     outb(0xA1, 0x02);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
-    outb(0x21, 0xFC);  // Odmaskuj wszystko (na razie)
+    outb(0x21, 0xFE);  // Odmaskuj wszystko (na razie)
     outb(0xA1, 0xFF);
 }
 
@@ -58,15 +58,15 @@ extern "C" void idt_init() {
     idt_set_descriptor(32, (void*)timer_handler_stub, 0x8E);
 
     // 2. Klawiatura (IRQ 1 -> 33)
-    idt_set_descriptor(0x21, (void*)isr_keyboard_stub, 0x8E);
+    idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
 
     // 3. Popraw maskowanie w pic_remap lub tutaj:
     // 0xFC = 11111100 (odblokowane IRQ0 - timer i IRQ1 - klawiatura)
-    outb(0x21, 0xFC); 
+    outb(0x21, 0xFE); 
     outb(0xA1, 0xFF);
 
     // 2. Ustaw konkretnie klawiaturę (IRQ 1 -> 33)
-    idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
+    //idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
 
     // 3. Ustaw timer (IRQ 0 -> 32)
     idt_set_descriptor(32, (void*)timer_handler_stub, 0x8E);

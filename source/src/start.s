@@ -96,7 +96,9 @@ _start:
 ; --- Stubs dla przerwań ---
 global isr_keyboard_stub
 extern keyboard_handler
+
 isr_keyboard_stub:
+    cld
     push rax
     push rcx
     push rdx
@@ -106,7 +108,9 @@ isr_keyboard_stub:
     push r9
     push r10
     push r11
+    
     call keyboard_handler                   ;
+    
     pop r11
     pop r10
     pop r9

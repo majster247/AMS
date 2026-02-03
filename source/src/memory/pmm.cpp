@@ -51,3 +51,4 @@ extern "C" void* pmm_alloc_frame() {
     }
     return nullptr; // Brak wolnej pamięci (Kernel Panic?)
 }
+
