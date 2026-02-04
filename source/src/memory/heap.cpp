@@ -1,8 +1,22 @@
 #include "vmm.h"
 #include "kernel.h"
 
-static uint64_t heap_start = 0x10000000; // 256MB wirtualnie
+static uint64_t heap_start = 0; 
 static uint64_t heap_current = heap_start;
+
+extern "C" void heap_init(void* addr, uint64_t size) {
+    heap_start = (uint64_t)addr;
+    heap_current = heap_start;
+    // Opcjonalnie: możesz tu od razu zmapować kilka stron, 
+    // żeby kmalloc nie musiał robić wszystkiego na raz.
+    //Mapuj pierwszą stronę
+    vmm_map(heap_start, heap_start, PAGE_PRESENT | PAGE_WRITABLE);
+
+    write_serial_string("[HEAP] Zainicjalizowano na adresie: ");
+    write_serial_hex(heap_current);
+    write_serial_string("\n");
+}
+
 
 extern "C" void* kmalloc(size_t size) {
     size = (size + 7) & ~7;

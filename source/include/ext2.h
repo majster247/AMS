@@ -79,3 +79,5 @@ struct ext2_directory_entry {
 // Funkcje eksportowane do VFS
 bool ext2_init(ahci_port* port);
 uint32_t ext2_read_node(struct vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer);
+
+char* ext2_read_file(const char* path);

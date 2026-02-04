@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "kernel.h"
 #include "io.h"
+#include "task.h"
 
 static char hex_buffer[20]; // 0x + 16 znaków + null terminator
 

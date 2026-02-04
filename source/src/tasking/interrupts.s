@@ -1,9 +1,7 @@
-[bits 64]
 extern timer_handler_c
 extern schedule
 global timer_handler_stub
 
-; interrupts.s
 timer_handler_stub:
     push rax
     push rbx
@@ -21,15 +19,17 @@ timer_handler_stub:
     push r14
     push r15
 
-    mov rdi, rsp    ; Przekaż RSP do schedulera
+    mov rdi, rsp    
     call timer_handler_c
     call schedule
-    mov rsp, rax    ; Zmień RSP na ten zwrócony przez scheduler
+    mov rsp, rax    ; Tu przeskakujemy na stos innego zadania
 
+    ; EOI (End of Interrupt) dla PIC
     mov al, 0x20
     out 0x20, al
 
-    pop r15         ; Popujemy w odwrotnej kolejności!
+    ; TERAZ POPUJEMY W IDEALNIE ODWROTNEJ KOLEJNOŚCI
+    pop r15
     pop r14
     pop r13
     pop r12
@@ -44,4 +44,13 @@ timer_handler_stub:
     pop rcx
     pop rbx
     pop rax
-    iretq           ; Tu dzieje się magia przełączania RIP i RSP
+    iretq
+
+global mouse_int_asm_wrapper
+extern mouse_handler
+
+mouse_int_asm_wrapper:
+    pushaq             ; Twoje makro do zapisania wszystkich rejestrów
+    call mouse_handler
+    popaq              ; Przywrócenie rejestrów
+    iretq              ; Powrót z przerwania 64-bit

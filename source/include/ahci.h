@@ -113,4 +113,5 @@ extern "C" {
     void ahci_init(uint32_t bar5);
     bool ahci_read(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer);
     bool ahci_write(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer);
+    void ahci_read_sectors(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer);
 }

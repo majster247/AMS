@@ -3,6 +3,8 @@
 #include "heap.h"
 #include "kernel.h"
 #include "vfs.h"
+#include "ahci.h"
+#define BLOCK_SIZE 1024
 
 static ext2_superblock sb;
 static ahci_port* g_port;
@@ -108,6 +110,26 @@ bool ext2_read_inode(uint32_t inode_no, ext2_inode* inode_out) {
     memcpy(inode_out, local_buffer + final_offset, sizeof(ext2_inode));
     
     return true;
+}
+
+void ext2_read_inode_struct(uint32_t inode_num, ext2_inode* inode_out) {
+    // Obliczanie grupy i indeksu (uproszczone)
+    uint32_t inodes_per_group = sb.s_inodes_per_group;
+    uint32_t group = (inode_num - 1) / inodes_per_group;
+    uint32_t index = (inode_num - 1) % inodes_per_group;
+    
+    // Odczyt deskryptora grupy
+    uint8_t* block_buf = (uint8_t*)kmalloc(block_size);
+    uint32_t gd_block = (block_size == 1024) ? 2 : 1;
+    ext2_read_block(gd_block, block_buf);
+    ext2_group_descriptor* gds = (ext2_group_descriptor*)block_buf;
+    ext2_group_descriptor gd = gds[group];
+    uint32_t inode_table_block = gd.bg_inode_table;
+    uint32_t inode_block = inode_table_block + (index * sb.s_inode_size) / block_size;
+    uint32_t inode_offset = (index * sb.s_inode_size) % block_size;
+    ext2_read_block(inode_block, block_buf);
+    memcpy(inode_out, block_buf + inode_offset, sizeof(ext2_inode));
+    kfree(block_buf);
 }
 
 bool ext2_init(ahci_port* port) {
@@ -222,3 +244,32 @@ bool ext2_init(ahci_port* port) {
 
 }
 
+char* ext2_read_file(const char* path) {
+    // 1. Znajdź i-node (wiemy z logów, że hello.txt to 12 / 0x0C)
+    // Docelowo tutaj powinna być funkcja ext2_find_inode(path)
+    uint32_t inode_num = 0;
+    
+    if (strcmp(path, "/hello.txt") == 0) {
+        inode_num = 12; // Twoje magiczne 0x0C
+    } else {
+        return nullptr; // Na razie obsługujemy tylko ten jeden plik testowo
+    }
+
+    // 2. Pobierz strukturę i-noda z dysku
+    ext2_inode inode;
+    ext2_read_inode_struct(inode_num, &inode); // Twoja funkcja czytająca i-node
+
+    // 3. Alokuj pamięć na zawartość (rozmiar z i-noda)
+    uint32_t size = inode.i_size;
+    char* buffer = (char*)kmalloc(size + 1); // +1 na znak końca stringa \0
+
+    // 4. Odczytaj pierwszy blok danych (zakładamy mały plik < 1024 bajty)
+    // i_block[0] to bezpośredni wskaźnik na dane
+    uint32_t block_index = inode.i_block[0]; // To jest numer BLOKU
+    uint32_t lba_sector = block_index * (BLOCK_SIZE / 512); // Przeliczamy na SEKTOR
+
+
+    ahci_read_sectors(g_port, lba_sector, (BLOCK_SIZE / 512), (uint16_t*)buffer);
+    buffer[size] = '\0'; // Zamknij string
+    return buffer;
+}

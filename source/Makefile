@@ -14,7 +14,8 @@ SRCS = src/kernel.cpp src/arch/x86_64/idt.cpp src/drivers/keyboard.cpp \
        src/memory/pmm.cpp src/utils.cpp src/memory/vmm.cpp src/memory/heap.cpp \
        src/tasking/scheduler.cpp src/fs/vfs.cpp src/shell.cpp src/drivers/pci.cpp \
        src/drivers/ahci.cpp src/fs/ext2.cpp src/drivers/graphics.cpp src/graphics_utils.cpp \
-	   src/drivers/font_data.cpp src/drivers/wallpaper_data.cpp
+	   src/drivers/font_data.cpp src/drivers/wallpaper_data.cpp \
+	   src/drivers/mouse.cpp src/drivers/gui/window.cpp
 OBJS = build/start.o \
        build/tasking/interrupts.o \
        $(patsubst src/%.cpp, build/%.o, $(SRCS))

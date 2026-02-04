@@ -57,7 +57,6 @@ extern "C" {
     int rand();
     void srand(unsigned int seed);
 
-    void sleep(uint32_t ms);
     void get_time(int &h, int &m, int &s);
 
     //VGA COLORS

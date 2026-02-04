@@ -10,3 +10,4 @@ void cmd_matrix();
 void cmd_big_time();
 void shell_update_remote();
 void cmd_gop_test();
+void list_tasks();

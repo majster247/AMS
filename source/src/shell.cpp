@@ -3,6 +3,9 @@
 #include "kernel.h"
 #include "io.h"
 #include "graphics.h"
+#include "task.h"
+#include "ext2.h"
+#include "heap.h"
 
 extern volatile char cmd_buffer[128];
 extern volatile int cmd_index;
@@ -131,9 +134,17 @@ void shell_execute(char* cmd) {
     if (strcmp(cmd, "ls") == 0 || strcmp(cmd, "ls -lah") == 0) {
         cmd_ls();
     } 
-    else if (strncmp(cmd, "cat ", 4) == 0) {
-        cmd_cat(cmd + 4);
-    } 
+    else if (strcmp(cmd, "cat") == 0) {
+        // Sprawdź czy masz funkcję vfs_read, ona jest bezpieczniejsza
+        // Na razie użyjmy deklaracji, którą zasugerował kompilator po poprawce:
+        char* content = (char*)ext2_read_node(vfs_find_node(vfs_root, "hello.txt"), 0, 1024, (uint8_t*)kmalloc(1024));
+        if (content) {
+            write_serial_string("[SHELL] Zawartość pliku hello.txt:\n");
+            write_serial_string(content);
+            write_serial_string("\n");
+            kfree(content); // Odkomentuj jak dodasz deklarację kfree
+        }
+    }
     else if (strcmp(cmd, "clear") == 0) {
         cmd_clear();
     } 
@@ -453,4 +464,26 @@ void cmd_gop_test() {
     // Czekaj na klawisz przez Serial, żeby wrócić do trybu tekstowego
     write_serial_string("Tryb graficzny aktywny. Naciśnij klawisz na Serialu, by wyjść...\n");
     serial_read();
+}
+
+
+// ------ Tasks and Multitasking will be added later ------
+void list_tasks() {
+    task* iter = task_list;
+    write_serial_string("ID | STATE    | SLEEP_TICKS\n");
+    write_serial_string("---------------------------\n");
+    while(iter) {
+        const char* state_str = "UNKNOWN";
+        if(iter->state == STATE_RUNNING)  state_str = "RUNNING";
+        if(iter->state == STATE_READY)    state_str = "READY  ";
+        if(iter->state == STATE_SLEEPING) state_str = "SLEEP  ";
+        
+        write_serial_dec(iter->id);
+        write_serial_string(" | ");
+        write_serial_string(state_str);
+        write_serial_string(" | ");
+        write_serial_dec(iter->ticks_to_sleep);
+        write_serial_string("\n");
+        iter = iter->next;
+    }
 }

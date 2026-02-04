@@ -156,3 +156,11 @@ extern "C" void ahci_init(uint32_t bar5) {
         }
     }
 }
+
+//ahci_read_sectors
+
+void ahci_read_sectors(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer) {
+    if (!ahci_read(port, lba, count, buffer)) {
+        write_serial_string("[AHCI] Blad odczytu sektorow!\n");
+    }
+}
