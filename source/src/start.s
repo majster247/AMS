@@ -9,6 +9,14 @@ mb2_header_start:
     dd mb2_header_end - mb2_header_start    ; Długość nagłówka
     dd 0x100000000 - (0xE85250D6 + 0 + (mb2_header_end - mb2_header_start))
     
+    ; TAG: Request Framebuffer
+    dw 5    ; type
+    dw 0    ; flags
+    dd 20   ; size
+    dd 1280 ; width
+    dd 720 ; height
+    dd 32   ; depth
+
     ; Tag kończący
     align 8
     dw 0, 0
@@ -40,7 +48,8 @@ _start:
     or eax, 0b11                            ; Present + Writable
     mov [p3_table], eax
 
-    ; P2[0..511] -> 2MB Huge Pages
+    ; P2[0..2047] -> Mapujemy pierwsze 4 GB (używając 4 tablic PD)
+    ; Dla uproszczenia na start zróbmy mapowanie 2 GB (2 tablice PD)
     mov ecx, 0
 .map_p2:
     mov eax, 0x200000                       ; 2MB
@@ -49,7 +58,7 @@ _start:
     mov [p2_table + ecx * 8], eax           ; Zapisz adres (low)
     mov [p2_table + ecx * 8 + 4], edx       ; Zapisz adres (high)
     inc ecx
-    cmp ecx, 512
+    cmp ecx, 1024
     jne .map_p2
 
     ; 3. Aktywacja trybu IA-32e (Long Mode)
@@ -110,6 +119,9 @@ isr_keyboard_stub:
     push r11
     
     call keyboard_handler                   ;
+
+    mov al, 0x20
+    out 0x20, al
     
     pop r11
     pop r10

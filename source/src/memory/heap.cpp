@@ -27,3 +27,9 @@ extern "C" void* kmalloc(size_t size) {
     return ptr;
 }
 
+extern "C" void kfree(void* ptr) {
+    // Na razie nic nie robimy - pancerna warstwa nie potrzebuje 
+    // odzyskiwać pamięci w fazie bootowania.
+    (void)ptr; 
+}
+

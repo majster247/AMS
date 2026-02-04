@@ -40,11 +40,16 @@ void pic_remap() {
     outb(0xA1, 0x02);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
-    outb(0x21, 0xFE);  // Odmaskuj wszystko (na razie)
+    outb(0x21, 0xFD);
     outb(0xA1, 0xFF);
 }
 
 extern "C" void timer_handler_stub();
+
+extern "C" void timer_handler_c() {
+    system_ticks++;
+    outb(0x20, 0x20); // KONIECZNE: Powiedz PIC, że obsłużyłeś przerwanie
+}
 
 extern "C" void idt_init() {
     // 1. Wypełnij wszystko ignorowaniem
@@ -61,9 +66,9 @@ extern "C" void idt_init() {
     idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
 
     // 3. Popraw maskowanie w pic_remap lub tutaj:
-    // 0xFC = 11111100 (odblokowane IRQ0 - timer i IRQ1 - klawiatura)
-    outb(0x21, 0xFE); 
-    outb(0xA1, 0xFF);
+    /// 0xFC = 11111100 (odblokowuje IRQ0 - timer I IRQ1 - klawiatura)
+    outb(0x21, 0xFC); 
+    outb(0xA1, 0xFF); // Slave PIC nas nie obchodzi na razie
 
     // 2. Ustaw konkretnie klawiaturę (IRQ 1 -> 33)
     //idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
@@ -82,3 +87,9 @@ extern "C" void idt_init() {
     asm volatile ("lidt %0" : : "m"(_idtr));
 }
 
+void timer_init(uint32_t hz) {
+    uint32_t divisor = 1193180 / hz;       
+    outb(0x43, 0x36);                     
+    outb(0x40, (uint8_t)(divisor & 0xFF)); 
+    outb(0x40, (uint8_t)((divisor >> 8) & 0xFF)); 
+}

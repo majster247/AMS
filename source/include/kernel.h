@@ -12,14 +12,27 @@ extern "C" {
     void terminal_initialize();
     void terminal_writestring(const char* data);
     void terminal_putchar(char c);
+    void terminal_set_color(uint8_t fg, uint8_t bg);
+    void terminal_set_cursor(int x, int y);
+    void terminal_put_at(int x, int y, char c, uint8_t color);
+    void terminal_clear();
+    void terminal_writestring_at(const char* data, int x, int y);
+    void terminal_write_dec(uint32_t val);
     void idt_init();
     void keyboard_init();
+    uint8_t keyboard_get_char(); // Zwraca znak z klawiatury (blokujące)
+    uint8_t keyboard_get_char_nonblocking(); // Zwraca znak z klawiatury (nieblokujące)
     
     int init_serial();
     void write_serial(char a);
     void write_serial_string(const char* str);
     void write_serial_hex(uint64_t val);
     void write_serial_char(char c);
+    void write_serial_string(const char* str);
+    void write_serial_dec(uint64_t val);
+    bool serial_received();
+    char serial_read();
+
     const char* to_hex(uint64_t val);
 
     void parse_multiboot(uint64_t addr);
@@ -38,4 +51,35 @@ extern "C" {
     
     void* memset(void* dest, int ch, size_t count);
     void* memcpy(void* dest, const void* src, size_t count);
+
+
+    //time and random
+    int rand();
+    void srand(unsigned int seed);
+
+    void sleep(uint32_t ms);
+    void get_time(int &h, int &m, int &s);
+
+    //VGA COLORS
+
+    #define VGA_COLOR_BLACK         0
+    #define VGA_COLOR_BLUE          1
+    #define VGA_COLOR_GREEN         2
+    #define VGA_COLOR_CYAN          3
+    #define VGA_COLOR_RED           4
+    #define VGA_COLOR_MAGENTA       5
+    #define VGA_COLOR_BROWN         6
+    #define VGA_COLOR_LIGHT_GREY    7
+    #define VGA_COLOR_DARK_GREY     8
+    #define VGA_COLOR_LIGHT_BLUE    9
+    #define VGA_COLOR_LIGHT_GREEN   10
+    #define VGA_COLOR_LIGHT_CYAN    11
+    #define VGA_COLOR_LIGHT_RED     12
+    #define VGA_COLOR_LIGHT_MAGENTA 13
+    #define VGA_COLOR_YELLOW        14
+    #define VGA_COLOR_WHITE         15
+
+
+   
 }
+

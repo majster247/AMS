@@ -23,7 +23,7 @@ extern "C" uint64_t schedule(registers* regs) {
     if (current_task->id == 2) {
         *((uint16_t*)0xB8002) = (uint16_t)('2' | (0x02 << 8)); // Zielona dwójka
     }
-
+    outb(0x20, 0x20); // EOI do PIC
     return current_task->kstack_top;
 }
 
@@ -34,13 +34,10 @@ task* create_task(void (*entry_point)()) {
     t->next = nullptr;
 
     if (entry_point != nullptr) {
-        // Używamy statycznego bufora na stos, żeby nie ufać kmallocowi
-        static uint8_t task_b_stack[4096] __attribute__((aligned(16)));
-        
-        // Ustawiamy szczyt stosu na KONIEC tablicy i wyrównujemy do 16 bajtów
-        uint64_t stack_top = ((uint64_t)task_b_stack + 4096) & ~0x0FULL;
-        uint64_t* stack = (uint64_t*)stack_top;
+        uint8_t* stack_mem = (uint8_t*)kmalloc(4096);
+        uint64_t stack_top = ((uint64_t)stack_mem + 4096) & ~0x0FULL;
 
+        uint64_t* stack = (uint64_t*)stack_top;
         // --- KONSTRUKCJA STOSU IRETQ ---
         *(--stack) = 0x10;             // SS
         *(--stack) = stack_top;        // RSP

@@ -7,6 +7,9 @@
 #include "shell.h"
 #include "pci.h"
 #include "ahci.h"
+#include "ext2.h"
+#include "idt.h"
+#include "graphics.h"
 
 
 
@@ -28,8 +31,11 @@ void log_step(const char* msg, uint64_t addr = 0) {
     write_serial_string("\n");
 }
 
+
+
 extern "C" void kmain(uint64_t multiboot_info_address) {
     init_serial();
+    timer_init(100); // 100 Hz
     log_step("=== AMS OS x64 Startuje ===");
     log_step("Multiboot Info", multiboot_info_address);
 
@@ -54,6 +60,26 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     // Musisz też oznaczyć adres bitmapy (0x200000) jako zajęty, żeby PMM sam siebie nie nadpisał!
     pmm_mark_used(0x200000, bitmap_size);
     pmm_mark_used(initrd_addr, 0x100000); // Przykładowe 1MB na initrd
+
+
+    //VMM - mapowanie całej pamięci fizycznej do wyższego połowy
+    log_step("Inicjalizacja VMM i mapowanie całej pamięci do Higher Half");
+    vmm_init_direct_map(128); // Mapujemy 128MB RAM (lub mniej, jeśli masz mniej)
+    log_step("VMM Zainicjalizowany, cała pamięć zmapowana do Higher Half (128MB)");
+
+    //Mapowanie Framebuffera do przestrzeni wirtualnej
+    for (uint64_t i = 0; i < (fb.width * fb.height * 4); i += 4096) {
+        vmm_map(fb.address + i, fb.address + i, PAGE_PRESENT | PAGE_WRITABLE);
+    }
+    log_step("Framebuffer zmapowany do przestrzeni wirtualnej");
+
+    if (fb.address != 0) {
+        write_serial_string("Framebuffer found at: ");
+        write_serial_hex(fb.address);
+        write_serial_string("\n");
+    } else {
+        log_step("Framebuffer NOT found in Multiboot tags!\n");
+    }
 
 
     // 4. Przerwania
@@ -88,7 +114,7 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     }
     write_serial_string("\n");
 
-    if (sata_port) {
+    if (sata_port != nullptr) {
     uint8_t* disk_buffer = (uint8_t*)kmalloc(512); // rzutujemy na bajty
     if (ahci_read(sata_port, 0, 1, (uint16_t*)disk_buffer)) {
         write_serial_string("[KERNEL] Odczytano tekst z SATA: ");
@@ -102,40 +128,60 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
         }
         write_serial_string("\n");
     }
+    }else {
+        write_serial_string("[KERNEL] Brak dostępnego portu SATA do testu odczytu.\n");
     }
 
     //Test zapisu na dysk SATA (jeśli znaleziono port)
-    log_step("Test zapisu na dysku SATA (jeśli dostępny)");
+    log_step("Test zapisu na dysku SATA");
 
-    const char* msg = "AMS OS TEST ZAPISU";
-    uint8_t* my_buffer = (uint8_t*)kmalloc(512);
-    memset(my_buffer, 0, 512);
-    memcpy(my_buffer, msg, 18);
+    if (sata_port != nullptr) {
+        const char* test_data = "AMS OS DISK WRITE TEST OK";
+        uint8_t* write_buf = (uint8_t*)kmalloc(512);
+        memset(write_buf, 0, 512);
+        memcpy(write_buf, test_data, 26);
 
-    // 1. Zapisujemy na sektorze 10 (bezpiecznie poza MBR)
-    if(ahci_write(sata_port, 10, 1, (uint16_t*)my_buffer)) {
-        write_serial_string("[KERNEL] Zapisano sektor 10!\n");
+        // Próbujemy zapisać na sektorze 10 (bezpieczny dystans od MBR)
+        if (ahci_write(sata_port, 10, 1, (uint16_t*)write_buf)) {
+            write_serial_string("[KERNEL] Sukces: Zapisano sektor 10!\n");
+
+            // Teraz odczytujemy to samo dla weryfikacji
+            uint8_t* read_buf = (uint8_t*)kmalloc(512);
+            if (ahci_read(sata_port, 10, 1, (uint16_t*)read_buf)) {
+                write_serial_string("[KERNEL] Weryfikacja zapisu: ");
+                write_serial_string((char*)read_buf);
+                write_serial_string("\n");
+            }
+        } else {
+            write_serial_string("[KERNEL] BLAD: ahci_write zwrocilo false!\n");
+        }
+    } else {
+        write_serial_string("[KERNEL] Pominieto: sata_port jest NULL\n");
     }
 
-    // 2. Czyścimy bufor, żeby mieć pewność, że czytamy z dysku, a nie z RAMu
-    memset(my_buffer, 0, 512);
-
-    // 3. Czytamy z powrotem
-    if(ahci_read(sata_port, 10, 1, (uint16_t*)my_buffer)) {
-        write_serial_string("[KERNEL] Odczyt po zapisie: ");
-        write_serial_string((char*)my_buffer);
-        write_serial_string("\n");
-    }
-
-    
-
+    // 6. EXT2 FS na SATA
+    log_step("Inicjalizacja EXT2 na dysku SATA");
+    ext2_init(sata_port);
+    log_step("EXT2 Zainicjalizowany i podpięty do VFS");
 
     // 7. Shell
     log_step("Uruchamiam Shell użytkownika");
     terminal_writestring("Welcome to AMS OS!\n");
     shell_init();
+    log_step("System gotowy. Wchodzę w pętlę główną.");
+
+    //Test rysowania paska stanu
+    log_step("Rysuję pasek stanu na ekranie oraz wallpaper");
+    graphics_clear_screen(0x1D1D1D); // Ciemnoszary "pulpit"
+    graphics_draw_bmp_centered();
+    draw_status_bar();
+    log_step("Pasek stanu i wallpaper narysowane.");
+
+    // najpierw koloruj pulpit, potem rysuj wallpaper, potem pasek stanu na wierzch bo to warstwami idzie nygus
 
     while(1) {
         shell_update();
+        shell_update_remote();
+        asm volatile("hlt"); // Opcjonalnie: zatrzymaj procesor do następnego przerwania (oszczędza CPU)
     }
 }

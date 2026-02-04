@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "graphics.h"
 #include <stdint.h>
 
 // Globalna zmienna, w której zapiszemy adres naszego systemu plików
@@ -32,6 +33,19 @@ struct multiboot_tag_module {
     uint32_t mod_end;   // Adres fizyczny końca modułu
     char cmdline[];     // Opcjonalna linia komend
 };
+
+struct multiboot_tag_framebuffer {
+    uint32_t type;
+    uint32_t size;
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t framebuffer_bpp;
+    uint8_t framebuffer_type;
+    uint16_t reserved;
+};
+
 
 extern "C" void pmm_mark_free(uint64_t start, uint64_t size);
 
@@ -77,6 +91,38 @@ extern "C" void parse_multiboot(uint64_t addr) {
                     pmm_mark_free(start, length);
                 }
             }
+        }
+
+        //Tag Typu 8: Framebuffer
+         if (tag->type == 8) {
+            write_serial_string("[MEM] Znaleziono tag framebuffera.\n");
+            multiboot_tag_framebuffer* fb_tag = (multiboot_tag_framebuffer*)tag_ptr;
+            fb.address = fb_tag->framebuffer_addr;
+            fb.width = fb_tag->framebuffer_width;
+            fb.height = fb_tag->framebuffer_height;
+            fb.pitch = fb_tag->framebuffer_pitch;
+            
+
+            //logowanie info o framebufferze
+            write_serial_string("      -> Adres: ");
+            write_serial_hex(fb.address);
+            write_serial_string("\n");
+            write_serial_string(" Pitch: ");
+            write_serial_dec(fb.pitch);
+            write_serial_string("\n");
+            write_serial_string(" BPP: ");
+            write_serial_dec(fb_tag->framebuffer_bpp);
+            write_serial_string("\n");
+            write_serial_string(" Type: ");
+            write_serial_dec(fb_tag->framebuffer_type);
+            write_serial_string("\n");
+            write_serial_string(" Rozdzielczosc: ");
+            write_serial_dec(fb.width);
+            write_serial_string("x");
+            write_serial_dec(fb.height);
+            write_serial_string("\n");
+            break;
+
         }
 
         tag_ptr += (tag->size + 7) & ~7;

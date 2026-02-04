@@ -1,4 +1,5 @@
 [bits 64]
+extern timer_handler_c
 extern schedule
 global timer_handler_stub
 
@@ -21,8 +22,12 @@ timer_handler_stub:
     push r15
 
     mov rdi, rsp    ; Przekaż RSP do schedulera
+    call timer_handler_c
     call schedule
     mov rsp, rax    ; Zmień RSP na ten zwrócony przez scheduler
+
+    mov al, 0x20
+    out 0x20, al
 
     pop r15         ; Popujemy w odwrotnej kolejności!
     pop r14

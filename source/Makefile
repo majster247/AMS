@@ -13,8 +13,8 @@ SRCS = src/kernel.cpp src/arch/x86_64/idt.cpp src/drivers/keyboard.cpp \
        src/drivers/vga.cpp src/drivers/serial.cpp src/memory/multiboot_parser.cpp \
        src/memory/pmm.cpp src/utils.cpp src/memory/vmm.cpp src/memory/heap.cpp \
        src/tasking/scheduler.cpp src/fs/vfs.cpp src/shell.cpp src/drivers/pci.cpp \
-       src/drivers/ahci.cpp
-
+       src/drivers/ahci.cpp src/fs/ext2.cpp src/drivers/graphics.cpp src/graphics_utils.cpp \
+	   src/drivers/font_data.cpp src/drivers/wallpaper_data.cpp
 OBJS = build/start.o \
        build/tasking/interrupts.o \
        $(patsubst src/%.cpp, build/%.o, $(SRCS))
@@ -39,8 +39,15 @@ kernel.elf: $(OBJS)
 # Tworzenie obrazu dysku 64MB dla Ext2 oraz wypełnienie go przykładowym plikiem z napisem
 disk.img:
 	qemu-img create -f raw disk.img 64M
-	echo "AMS x64 suczko lecimy nie śpimy" > test.txt
-	dd if=test.txt of=disk.img bs=512 count=1 conv=notrunc
+	mkfs.ext2 -b 1024 disk.img
+	mkdir -p ./temp_mount
+	sudo mount -o loop disk.img ./temp_mount
+	sudo sh -c 'echo "AMS x64 suczko lecimy nie śpimy" > ./temp_mount/hello.txt'
+	sudo sh -c 'printf "A%.0s" {1..5000} > ./temp_mount/big_file.txt'
+	sudo chmod 666 ./temp_mount/hello.txt
+	sudo sync
+	sudo umount ./temp_mount
+	rmdir ./temp_mount
 
 ams.iso: kernel.elf
 	mkdir -p iso/boot/grub
@@ -54,10 +61,10 @@ ams.iso: kernel.elf
 # POPRAWIONE URUCHAMIANIE Z AHCI
 run: all
 	qemu-system-x86_64 -cdrom ams.iso -serial stdio \
-		-drive id=disk,file=disk.img,if=none,format=raw \
+		-drive id=disk,file=disk.img,if=none,format=raw,readonly=off \
 		-device ich9-ahci,id=ahci \
 		-device ide-hd,drive=disk,bus=ahci.0 \
-		-no-reboot -no-shutdown
+		-no-reboot -no-shutdown -d int,cpu_reset -D qemu.log 
 
 clean:
-	rm -rf build iso ams.iso kernel.elf initrd.tar hello.txt disk.img
+	rm -rf build iso ams.iso kernel.elf initrd.tar hello.txt disk.img qemu.log

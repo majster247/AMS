@@ -3,233 +3,156 @@
 #include "vmm.h"
 #include "heap.h"
 
-// DEFINICJA: Linker teraz znajdzie to miejsce w pamięci
 ahci_port* sata_port = nullptr;
 
+// Pomocnicze makro do zamiany adresu fizycznego na wirtualny w Higher Half
+#define VIRT(addr) ((uint64_t)(addr) + PHYSICAL_MEM_OFFSET)
 
-void ahci_rebase_port(ahci_port* port, int /* port_no */) {
-    // Alokujemy ramki dla list komend i FIS-ów
-    // Muszą być wyrównane do 4KB, co pmm_alloc_frame zapewnia
-    void* clb_phys = pmm_alloc_frame();
-    void* fb_phys = pmm_alloc_frame();
-    void* ctba_phys = pmm_alloc_frame();
+bool ahci_stop_port(ahci_port* port) {
+    port->cmd &= ~0x0001; // ST = 0
+    port->cmd &= ~0x0010; // FRE = 0
 
-    // AHCI używa adresów fizycznych. W 64-bitach musimy rozbić je na Low i High
-    port->clb = (uint32_t)(uintptr_t)clb_phys;
-    port->clbu = (uint32_t)((uintptr_t)clb_phys >> 32);
-    
-    port->fb = (uint32_t)(uintptr_t)fb_phys;
-    port->fbu = (uint32_t)((uintptr_t)fb_phys >> 32);
-
-    // Nagłówek komendy 0 wskazuje na tablicę komend (Command Table)
-    // Mapujemy clb_phys, aby móc po nim pisać w jądrze
-    ahci_hba_cmd_header* cmd_header = (ahci_hba_cmd_header*)clb_phys;
-    
-    // Czyścimy listę komend (32 sloty)
-    for (int i = 0; i < 32; i++) {
-        cmd_header[i].prdtl = 8; // Ilość wpisów PRDT
-        cmd_header[i].ctba = (uint32_t)(uintptr_t)ctba_phys;
-        cmd_header[i].ctbau = (uint32_t)((uintptr_t)ctba_phys >> 32);
-    }
-
-    // Włączamy port (ST i FRE bits)
-    while (port->cmd & (1 << 15)); // Czekaj na CR (Command list Running)
-    
-    port->cmd |= (1 << 4); // FRE (FIS Receive Enable)
-    port->cmd |= (1 << 0); // ST (Start)
-
-    write_serial_string("[AHCI] Port zrebazowany.\n");
-    memset(clb_phys, 0, 4096);
-    memset(fb_phys, 0, 4096);
-    memset(ctba_phys, 0, 4096);
-}
-
-void ahci_init(uint32_t abar_phys) {
-    // Mapujemy rejestry HBA
-    vmm_map(abar_phys, abar_phys, PAGE_PRESENT | PAGE_WRITABLE);
-    ahci_hba_mem* hba = (ahci_hba_mem*)(uintptr_t)abar_phys;
-
-    hba->ghc |= (1 << 31); // Włącz AE (AHCI Enable)
-
-    uint32_t pi = hba->pi;
-    for (int i = 0; i < 32; i++) {
-        if (pi & (1 << i)) {
-            uint32_t ssts = hba->ports[i].ssts;
-            uint8_t det = ssts & 0x0F;
-            
-            if (det == 3) { // 3 = Device present and PHY established
-                write_serial_string("[AHCI] Znaleziono dysk na porcie: ");
-                write_serial_hex(i);
-                write_serial_string("\n");
-                
-                ahci_rebase_port(&hba->ports[i], i);
-
-                // Rejestrujemy pierwszy napotkany dysk jako główny
-                if (sata_port == nullptr) {
-                    sata_port = &hba->ports[i];
-                }
-            }
-        }
-    }
-}
-
-bool ahci_read(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer) {
-    port->is = 0xFFFF; // Wyczyść flagi przerwań na porcie
-    
-    // Adres listy komend z rejestrów portu (pamiętaj o 64-bitach)
-    uint64_t clb = port->clb | ((uint64_t)port->clbu << 32);
-    ahci_hba_cmd_header* cmd_header = (ahci_hba_cmd_header*)clb;
-
-    int slot = 0; // Używamy pierwszego slotu
-    cmd_header[slot].cfl = sizeof(fis_reg_h2d) / sizeof(uint32_t);
-    cmd_header[slot].w = 0;      // Kierunek: Read (0)
-    cmd_header[slot].prdtl = 1;  // Jeden wpis w PRDT (jeden ciągły bufor)
-
-    // Pobieramy adres tabeli komend
-    uint64_t ctba = cmd_header[slot].ctba | ((uint64_t)cmd_header[slot].ctbau << 32);
-    ahci_hba_cmd_table* cmd_table = (ahci_hba_cmd_table*)ctba;
-
-    // Czyścimy tabelę komend (bezpieczne rzutowanie dla uniknięcia warningów)
-    uint32_t* table_ptr = (uint32_t*)cmd_table;
-    for (int i = 0; i < (int)(sizeof(ahci_hba_cmd_table) / sizeof(uint32_t)); i++) {
-        table_ptr[i] = 0;
-    }
-
-    // PRDT - wskazujemy na bufor w pamięci RAM
-    // UWAGA: DBA musi być adresem FIZYCZNYM. Jeśli używasz VMM, 
-    // upewnij się, że buffer jest zmapowany 1:1 lub pobierz jego adres fizyczny.
-    uint64_t phys_buffer = vmm_get_phys((uint64_t)buffer); 
-
-    if (phys_buffer == 0) {
-        write_serial_string("[AHCI] ERROR: Buffer not mapped in VMM!\n");
-        return false;
-    }
-
-    cmd_table->prdt_entry[0].dba = (uint32_t)(uintptr_t)phys_buffer;
-    cmd_table->prdt_entry[0].dbau = (uint32_t)((uintptr_t)phys_buffer >> 32);
-    cmd_table->prdt_entry[0].dbc = (count << 9) - 1; // Rozmiar w bajtach - 1
-    cmd_table->prdt_entry[0].i = 1;                 // Interrupt on completion
-
-    // Budowa FIS-u (ATA Command)
-    fis_reg_h2d* cmdfis = (fis_reg_h2d*)(&cmd_table->cfis);
-    cmdfis->fis_type = 0x27; // Register FIS - Host to Device
-    cmdfis->c = 1;           // Command
-    cmdfis->command = 0x25;  // READ DMA EXT (LBA48)
-
-    cmdfis->lba0 = (uint8_t)lba;
-    cmdfis->lba1 = (uint8_t)(lba >> 8);
-    cmdfis->lba2 = (uint8_t)(lba >> 16);
-    cmdfis->device = 1 << 6; // LBA mode
-    
-    cmdfis->lba3 = (uint8_t)(lba >> 24);
-    cmdfis->lba4 = (uint8_t)(lba >> 32);
-    cmdfis->lba5 = (uint8_t)(lba >> 40);
-
-    cmdfis->countl = count & 0xFF;
-    cmdfis->counth = (count >> 8) & 0xFF;
-
-    // Czekaj aż dysk nie będzie zajęty
-    int spin = 0;
-    while ((port->tfd & (0x80 | 0x08)) && spin < 1000000) {
-        spin++;
-    }
-    if (spin == 1000000) return false; // Timeout
-
-    port->ci = (1 << slot); // WYDANIE ROZKAZU
-
-
-    write_serial_string("[AHCI] Status rejestru PxSSTS: ");
-    write_serial_hex(port->ssts);
-    write_serial_string("\n[AHCI] Status rejestru PxTFD: ");
-    write_serial_hex(port->tfd);
-    write_serial_string("\n");
-
-    uint64_t timeout = 1000000; // Dowolna duża liczba
+    int timeout = 1000000;
     while (timeout--) {
-        if ((port->ci & (1 << slot)) == 0) {
-            write_serial_string("[AHCI] Komenda zakonczona sukcesem!\n");
-            return true;
-        }
-
-        // Jeśli status rejestru IS (Interrupt Status) pokazuje błąd
-        if (port->is & (1 << 30)) {
-            write_serial_string("[AHCI] FATAL ERROR w rejestrze PxIS!\n");
-            return false;
-        }
+        if (!(port->cmd & (1 << 15)) && !(port->cmd & (1 << 14))) return true;
     }
-
-    write_serial_string("[AHCI] TIMEOUT! Dysk nie odpowiedzial na komende.\n");
     return false;
 }
 
+void ahci_start_port(ahci_port* port) {
+    while (port->cmd & (1 << 15)); // Czekaj na CR = 0
+    port->cmd |= 0x0010;           // FRE = 1
+    port->cmd |= 0x0001;           // ST = 1
+}
 
-bool ahci_write(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer) {
-    port->is = 0xFFFF; // Czyścimy rejestr przerwań
-    int slot = 0;      // Używamy slotu 0
+void ahci_rebase_port(ahci_port* port, int port_no) {
+    ahci_stop_port(port);
 
-    // Pobieramy adres fizyczny bufora (wymagane dla DMA)
-    uint64_t phys_buffer = vmm_get_phys((uint64_t)buffer);
-    if (phys_buffer == 0) {
-        write_serial_string("[AHCI] WRITE ERROR: Buffer not mapped!\n");
+    // Alokujemy struktury (muszą być wyrównane!)
+    // Command List: 1KB wyrównania (32 wpisy po 32 bajty)
+    // Received FIS: 256 bajtów
+    // Command Table: zależnie od ilości PRDT
+    
+    uint64_t clb_phys = (uint64_t)pmm_alloc_frame(); // Używamy PMM dla czystych ramek
+    uint64_t fb_phys = (uint64_t)pmm_alloc_frame();
+
+    port->clb = (uint32_t)clb_phys;
+    port->clbu = (uint32_t)(clb_phys >> 32);
+    port->fb = (uint32_t)fb_phys;
+    port->fbu = (uint32_t)(fb_phys >> 32);
+
+    // Zerujemy struktury w pamięci wirtualnej
+    memset((void*)VIRT(clb_phys), 0, 1024);
+    memset((void*)VIRT(fb_phys), 0, 256);
+
+    // Alokacja Command Table dla slotu 0
+    uint64_t ctba_phys = (uint64_t)pmm_alloc_frame();
+    ahci_command_header* cmd_header = (ahci_command_header*)VIRT(clb_phys);
+    cmd_header[0].ctba = (uint32_t)ctba_phys;
+    cmd_header[0].ctbau = (uint32_t)(ctba_phys >> 32);
+    memset((void*)VIRT(ctba_phys), 0, 256);
+
+    port->serr = 0xFFFFFFFF; // Czyścimy błędy
+    port->is = 0xFFFFFFFF;   // Czyścimy przerwania
+
+    ahci_start_port(port);
+    write_serial_string("[AHCI] Port rebased i wystartowany.\n");
+}
+
+bool ahci_command(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer, bool is_write) {
+    int slot = 0; // Używamy tylko pierwszego slotu dla uproszczenia
+
+    // 1. Czekaj na wolne urządzenie (BSY/DRQ w Task File)
+    int timeout = 1000000;
+    while ((port->tfd & (0x80 | 0x08)) && timeout--) {
+        for(volatile int i=0; i<100; i++);
+    }
+    if (timeout <= 0) {
+        write_serial_string("[AHCI] Port BSY/DRQ timeout!\n");
         return false;
     }
 
-    // Pobieramy nagłówek komendy - TU POPRAWKA NA ahci_hba_cmd_header
-    uint64_t clb_addr = ((uint64_t)port->clbu << 32) | port->clb;
-    ahci_hba_cmd_header* cmd_header = (ahci_hba_cmd_header*)clb_addr;
+    // 2. Pobierz wskaźniki na struktury
+    ahci_command_header* cmd_header = (ahci_command_header*)VIRT(port->clb);
+    cmd_header += slot;
+    cmd_header->cfl = sizeof(fis_reg_h2d) / sizeof(uint32_t);
+    cmd_header->w = is_write ? 1 : 0;
+    cmd_header->prdtl = 1; // Jeden wpis w PRDT
 
-    cmd_header[slot].cfl = sizeof(fis_reg_h2d) / sizeof(uint32_t); 
-    cmd_header[slot].w = 1;      // Operacja ZAPISU
-    cmd_header[slot].prdtl = 1;  
+    ahci_command_table* cmd_table = (ahci_command_table*)VIRT(cmd_header->ctba);
+    memset(cmd_table, 0, sizeof(ahci_command_table));
 
-    // Pobieramy tablicę komend - TU POPRAWKA NA ahci_hba_cmd_table
-    uint64_t ctba_addr = ((uint64_t)cmd_header[slot].ctba | ((uint64_t)cmd_header[slot].ctbau << 32));
-    ahci_hba_cmd_table* cmd_table = (ahci_hba_cmd_table*)ctba_addr;
-    
-    // Używamy Twojego memset, żeby wyczyścić tablicę komend
-    memset(&cmd_table[slot], 0, sizeof(ahci_hba_cmd_table));
-
-    // Ustawiamy PRDT
-    cmd_table->prdt_entry[0].dba = (uint32_t)phys_buffer;
-    cmd_table->prdt_entry[0].dbau = (uint32_t)(phys_buffer >> 32);
-    cmd_table->prdt_entry[0].dbc = (count << 9) - 1; 
+    // 3. Ustaw PRDT (gdzie DMA ma pisać/czytać)
+    uint64_t phys_buf = vmm_get_phys((uint64_t)buffer);
+    cmd_table->prdt_entry[0].dba = (uint32_t)phys_buf;
+    cmd_table->prdt_entry[0].dbau = (uint32_t)(phys_buf >> 32);
+    cmd_table->prdt_entry[0].dbc = (count << 9) - 1; // 512B na sektor
     cmd_table->prdt_entry[0].i = 1;
 
-    // Budujemy FIS
+    // 4. Buduj FIS (Host to Device)
     fis_reg_h2d* cmdfis = (fis_reg_h2d*)(&cmd_table->cfis);
-    cmdfis->fis_type = 0x27; 
-    cmdfis->c = 1;           
-    cmdfis->command = 0x35;  // WRITE DMA EXT
+    cmdfis->fis_type = FIS_TYPE_REG_H2D;
+    cmdfis->c = 1;
+    cmdfis->command = is_write ? 0x35 : 0x25; // WRITE/READ DMA EXT
 
     cmdfis->lba0 = (uint8_t)lba;
     cmdfis->lba1 = (uint8_t)(lba >> 8);
     cmdfis->lba2 = (uint8_t)(lba >> 16);
-    cmdfis->device = 1 << 6; 
-
+    cmdfis->device = 1 << 6; // LBA Mode
     cmdfis->lba3 = (uint8_t)(lba >> 24);
     cmdfis->lba4 = (uint8_t)(lba >> 32);
     cmdfis->lba5 = (uint8_t)(lba >> 40);
-
     cmdfis->countl = (uint8_t)count;
     cmdfis->counth = (uint8_t)(count >> 8);
 
-    // Czekamy na gotowość portu
-    uint32_t spin = 0;
-    while ((port->tfd & (0x80 | 0x08)) && spin < 1000000) {
-        spin++;
-    }
-    if (spin == 1000000) return false;
+    // 5. Wydaj komendę i czekaj
+    port->is = 0xFFFFFFFF;
+    asm volatile("mfence" ::: "memory"); // Upewnij się, że zapisy do RAM się zakończyły
+    port->ci = (1 << slot);
 
-    port->ci = (1 << slot); 
-
-    // Czekamy na koniec
-    while (1) {
-        if ((port->ci & (1 << slot)) == 0) break;
-        if (port->is & (1 << 30)) {
-            write_serial_string("[AHCI] Write Disk Error!\n");
+    while (true) {
+        if (!(port->ci & (1 << slot))) break;
+        if (port->is & (1 << 30)) { // TFES bit
+            write_serial_string("[AHCI] Blad krytyczny HBA! PxSERR: ");
+            write_serial_hex(port->serr);
             return false;
         }
+        asm volatile("pause"); // Daj procesorowi odpocząć, AHCI i tak jest wolne
     }
 
-    return true;
+    return (port->tfd & 0x01) ? false : true;
+}
+
+bool ahci_read(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer) {
+    return ahci_command(port, lba, count, buffer, false);
+}
+
+bool ahci_write(ahci_port* port, uint64_t lba, uint32_t count, uint16_t* buffer) {
+    return ahci_command(port, lba, count, buffer, true);
+}
+
+extern "C" void ahci_init(uint32_t bar5) {
+    write_serial_string("[AHCI] Start inicjalizacji MMIO...\n");
+
+    uint64_t virt_bar = (uint64_t)bar5 + PHYSICAL_MEM_OFFSET;
+    vmm_map(virt_bar, bar5, 0x03 | (1 << 4)); 
+
+    ahci_hba_mem* hba_mem = (ahci_hba_mem*)virt_bar;
+    hba_mem->ghc |= (1U << 31); // AE bit (AHCI Enable)
+
+    uint32_t pi = hba_mem->pi;
+    for (int i = 0; i < 32; i++) {
+        if (pi & (1 << i)) {
+            ahci_port* port = &hba_mem->ports[i];
+            uint32_t sig = port->sig;
+            if (sig == 0x00000101) {
+                write_serial_string("[AHCI] Znaleziono dysk SATA na porcie ");
+                write_serial_hex(i);
+                write_serial_string("\n");
+                sata_port = port;
+                ahci_rebase_port(port, i);
+                return;
+            }
+        }
+    }
 }
