@@ -11,7 +11,7 @@
 #include "idt.h"
 #include "graphics.h"
 #include "mouse.h"
-#include "window.h"
+#include "gui.h"
 
 
 
@@ -22,6 +22,7 @@ extern uint64_t initrd_addr;
 extern ahci_port* sata_port; // Globalny wskaźnik na pierwszy znaleziony port SATA (do testów)
 extern uint64_t bitmap_size; // Informujemy linker, że to jest w pmm.cpp
 
+Desktop* desktop = nullptr;
 
 void log_step(const char* msg, uint64_t addr = 0) {
     write_serial_string("[KERNEL] ");
@@ -90,12 +91,12 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     log_step("VMM Zainicjalizowany, cała pamięć zmapowana do Higher Half (128MB)");
 
     // Sterta (Heap)
-    heap_init((void*)0x40000000, 0x1000000); // 16MB na stertę zamiast 1MB
+    heap_init((void*)0x40000000, 128 * 1024 * 1024);
     log_step("Sterta (Heap) Zainicjalizowana");
 
 
     //Mapowanie Framebuffera do przestrzeni wirtualnej
-    uint64_t fb_virtual_base = 0xFFFF900000000000; // Wybierz jakiś wolny adres w High Memory
+    //uint64_t fb_virtual_base = 0xFFFF900000000000; // Wybierz jakiś wolny adres w High Memory
     for (uint64_t i = 0; i < (1280 * 720 * 4); i += 4096) {
         vmm_map(fb.address + i, fb.address + i, PAGE_PRESENT | PAGE_WRITABLE | (1 << 3) | (1 << 4));
     }
@@ -204,132 +205,136 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     //terminal_writestring("Welcome to AMS OS!\n");
     //shell_init();
     log_step("System gotowy. Wchodzę w pętlę główną.");
-
-    write_serial_string("Test zapisu do bufora...");
-    backbuffer[0] = 0x12345678;
-    write_serial_string(" OK\n");
     
-    write_serial_string("Test flipa...");
-    graphics_flip();
-    write_serial_string(" OK\n");
-
     graphics_init_double_buffer();
-    uint64_t bb_addr = (uint64_t)backbuffer;
+    uint64_t bbc_addr = (uint64_t)backbuffer;
     for (uint64_t i = 0; i < (1280 * 720 * 4); i += 4096) {
-        vmm_map(bb_addr + i, vmm_get_phys(bb_addr + i), PAGE_PRESENT | PAGE_WRITABLE);
+        vmm_map(bbc_addr + i, vmm_get_phys(bbc_addr + i), PAGE_PRESENT | PAGE_WRITABLE);
     }
     write_serial_string("[KERNEL] Backbuffer zmapowany pomyślnie.\n");
-
-    //Test rysowania paska stanu
-    log_step("Rysuję pasek stanu na ekranie oraz wallpaper");
-    graphics_clear_screen(0x1D1D1D); // Ciemnoszary "pulpit"
-    graphics_draw_bmp_centered();
-    draw_status_bar();
-    log_step("Pasek stanu i wallpaper narysowane.");
-    // najpierw koloruj pulpit, potem rysuj wallpaper, potem pasek stanu na wierzch bo to warstwami idzie nygus
-
-    mouse_init(); 
-    log_step("[KERNEL] Myszka zainicjalizowana.\n");
-    update_mouse_on_screen();
-
-     // Włączamy przerwania
-    log_step("Włączam przerwania (sti)");
-    asm volatile("sti");
-
-
     
-    // --------- Boot time measurement ---------
-    boot_end_cycles = rdtsc();   // System gotowy, zapisujemy koniec
-    uint64_t boot_cycles = boot_end_cycles - boot_start_cycles;
-    write_serial_string("[KERNEL] Czas rozruchu (w cyklach): ");
-    write_serial_hex(boot_cycles);
-    //konwersja na sekundy (przy 3GHz):
-    double boot_seconds = (double)boot_cycles / 3000000000.0;
-    write_serial_string(" (~");
-    char boot_time_str[32];
-    // Prosta konwersja float -> string (bez sprintf)
-    int len = 0;
-    int int_part = (int)boot_seconds;
-    double frac_part = boot_seconds - int_part;
-    // Integer part
-    if (int_part == 0) {
-        boot_time_str[len++] = '0';
+   // === INIT GUI ===
+   write_serial_string("[KERNEL] Inicjalizacja GUI...\n");
+    desktop = new Desktop();
+    desktop->Init();
+    write_serial_string("[KERNEL] GUI Zainicjalizowane.\n");
+    write_serial_string("[KERNEL] Dodaję okno terminala powitalnego...\n");
+    // Dodajemy okno powitalne
+    TerminalWindow* term = new TerminalWindow(100, 100);
+    desktop->AddWindow(term);
+    write_serial_string("[KERNEL] Okno terminala dodane.\n");
+    
+    // === DIAGNOSTYKA PAMIĘCI ===
+    extern uint32_t* backbuffer;
+    uint64_t bb_addr = (uint64_t)backbuffer;
+    uint64_t term_addr = (uint64_t)term;
+    uint64_t bb_end = bb_addr + (1280*720*4);
+    
+    write_serial_string("--- DEBUG PAMIECI ---\n");
+    
+    // Wypisz adres Backbuffera (Start)
+    write_serial_string("Backbuffer Start: ");
+    write_serial_hex(bb_addr);
+    write_serial_string("\n");
+    
+    // Wypisz adres Backbuffera (Koniec)
+    write_serial_string("Backbuffer End:   ");
+    write_serial_hex(bb_end);
+    write_serial_string("\n");
+
+    // Wypisz adres Okna
+    write_serial_string("Window Object:    ");
+    write_serial_hex(term_addr);
+    write_serial_string("\n");
+    
+    if (term_addr >= bb_addr && term_addr < bb_end) {
+        write_serial_string("FATAL ERROR: Okno zaalokowane WEWNATRZ backbuffera!\n");
+        // Tu jest problem z kmalloc
     } else {
-        char int_buf[16];
-        int int_len = 0;
-        while (int_part > 0) {
-            int_buf[int_len++] = '0' + (int_part % 10);
-            int_part /= 10;
-        }
-        for (int i = int_len - 1; i >= 0; i--) {
-            boot_time_str[len++] = int_buf[i];
-        }
+        write_serial_string("Pamiec OK. Obiekt poza buforem.\n");
     }
-    boot_time_str[len++] = '.';
-    // Fractional part (2 decimal places)
-    frac_part *= 100;
-    int frac_int = (int)frac_part;
-    if (frac_int < 10) {
-        boot_time_str[len++] = '0';
+    
+
+    write_serial_string("[KERNEL] Inicjalizacja myszy...\n");
+    mouse_init();
+    log_step("Mysz zainicjalizowana");
+    log_step("Wszystkie systemy gotowe, włączam przerywania i wchodzę w pętlę główną.");
+    asm volatile("sti");
+    log_step("Przerwania włączone. System działa.");
+
+     // --------- Boot time measurement ---------
+    boot_end_cycles = rdtsc();
+    uint64_t boot_cycles = boot_end_cycles - boot_start_cycles;
+    write_serial_string("[KERNEL] Czas bootowania (w cyklach): ");
+    write_serial_dec(boot_cycles);
+    write_serial_string("\n");
+    write_serial_string("[KERNEL] Czas bootowania (w sekundach, przy 3GHz): ");
+    double boot_seconds = boot_cycles / 3000000000.0;
+    char time_str[32]; // bez sprintf, więc ręcznie formatujemy
+    int time_len = 0;
+    int int_part = (int)boot_seconds;
+    int frac_part = (int)((boot_seconds - int_part) * 1000); // 3 miejsca po przecinku
+    // Część całkowita
+    char int_buffer[12];
+    int int_len = 0;
+    do {
+        int_buffer[int_len++] = '0' + (int_part % 10);
+        int_part /= 10;
+    } while (int_part > 0);
+    for (int i = int_len - 1; i >= 0; i--) {
+        time_str[time_len++] = int_buffer[i];
     }
-    char frac_buf[16];
-    int frac_len = 0;
-    while (frac_int > 0) {
-        frac_buf[frac_len++] = '0' + (frac_int % 10);
-        frac_int /= 10;
+    time_str[time_len++] = '.';
+    // Część ułamkowa
+    char frac_buffer[4];
+    frac_buffer[3] = 0; // null terminator
+    for (int i = 2; i >= 0; i--) {
+        frac_buffer[i] = '0' + (frac_part % 10);
+        frac_part /= 10;
     }
-    for (int i = frac_len - 1; i >= 0; i--) {
-        boot_time_str[len++] = frac_buf[i];
+    for (int i = 0; i < 3; i++) {
+        time_str[time_len++] = frac_buffer[i];
     }
-    boot_time_str[len] = '\0';
-    write_serial_string(boot_time_str);
-    write_serial_string(" seconds)\n");
+    time_str[time_len] = 0; // null terminator
+    write_serial_string(time_str);
+    write_serial_string(" s\n");
+    list_tasks(); // Wyświetl listę zadań na starcie
 
     // ---------------------------------------
 
-    list_tasks(); // Wyświetl listę zadań na starcie
-    
-    // Test okna GUI
-    Window test_win;
-    test_win.x = 100;
-    test_win.y = 100;
-    test_win.width = 300;
-    test_win.height = 200;
-    test_win.color = 0x007ACC; // Niebieski
-    const char* title = "AMS-OS Test Window";
-    test_win.title = title;
-    test_win.is_dragging = false;
-    draw_window(&test_win);
+    // Zmienne do myszy
+    int32_t old_mx = mouse_x, old_my = mouse_y;
+    save_background(mouse_x, mouse_y);
 
-    int32_t old_win_x = test_win.x;
-    int32_t old_win_y = test_win.y;
-    int32_t last_mouse_x = 0, last_mouse_y = 0;
+    while(1) {
+        // 1. Mysz
+        int mx = mouse_x;
+        int my = mouse_y;
+        bool lmb = mouse_left_pressed;
+        
+        // 2. Klawiatura - TO JEST NOWA CZĘŚĆ
+        // Pobieramy wszystkie znaki, które nazbierały się w buforze
+        char c;
+        while ((c = keyboard_getchar()) != 0) {
+            // Wysyłamy znak do okna, które jest aktualnie fokusowane
+            if (desktop) {
+                desktop->OnKeyboard(c);
+            }
+        }
 
-
-
-
-// Rysujemy tło RAZ przed pętlą
-graphics_draw_bmp_centered();
-
-while(1) {
-    // 1. NIE RYSUJEMY TAPETY CO KLATKĘ! 
-    // Zamiast tego czyścimy tylko obszar pod starym kursorem i zegarem
-    // Na razie dla testu: zakomentuj tapetę w pętli.
-    
-    // 2. Rysuj okna i pasek (lekkie operacje)
-    draw_window(&test_win);
-    draw_status_bar();
-
-
-    // 3. Myszka    
-    update_mouse_on_screen(); 
-
-    // 4. Kopiowanie na ekran
-    graphics_flip();
-
-    // 5. WAŻNE: Pozwól schedulerowi działać
-    // Jeśli nie używasz wielozadaniowości wywłaszczającej, musisz oddać czas:
-    // yield(); 
-}
+        // 3. Update & Draw
+        if (desktop) {
+            desktop->Update(mx, my, lmb);
+            
+            restore_background(old_mx, old_my);
+            desktop->Draw();
+            save_background(mx, my);
+            draw_cursor_shape(mx, my);
+            
+            graphics_flip();
+        }
+        
+        old_mx = mx; old_my = my;
+    }
 
 }

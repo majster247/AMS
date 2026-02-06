@@ -13,7 +13,7 @@ struct Framebuffer {
 
 extern Framebuffer fb;
 
-extern "C" uint32_t* backbuffer;
+extern uint32_t* backbuffer;
 
 extern "C" {
     void graphics_put_pixel(int x, int y, uint32_t color);
@@ -39,5 +39,7 @@ void draw_status_bar();
 void update_clock_display();
 void graphics_get_block(int x, int y, int w, int h, uint32_t* buffer);
 void graphics_put_block(int x, int y, int w, int h, uint32_t* buffer);
+void fill_screen(uint32_t color);
+
 
 #endif

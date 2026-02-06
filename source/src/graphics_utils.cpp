@@ -12,12 +12,17 @@ void draw_status_bar() {
 
     // Rysujemy tło paska na dole
     graphics_draw_rect(0, fb.height - 20, fb.width, 20, bar_color);
-
-    // Używamy znaków specjalnych CP437 do ozdoby (np. 0x10 to strzałka ►)
-    char status[128];
-    // Tu Twoja funkcja sprintf lub ręczne budowanie stringa
-    
-    graphics_print(10, fb.height - 18, "AMS-OS 64-bit | GOP HD Mode | Dziala!", 0xFFFFFF);
+    graphics_print(10, fb.height - 18, "AMS-OS 64-bit | ", 0xFFFFFF);
+    // Tutaj możesz dodać więcej informacji, pobierz rozdzielczość oraz ilość RAM z multibootinfo
+    // używamy sprintf do formatowania stringa z rozdzielczością
+    char res_str[32];
+    sprintf(res_str, "Res: %ux%u", fb.width, fb.height);
+    graphics_print(150, fb.height - 18, res_str, 0xFFFFFF);
+    //Ram z multiboota
+    char ram_str[32];
+    extern uint64_t ram_size_mb; // Pobieramy z multiboota (z multiboot_parser.cpp)
+    sprintf(ram_str, "RAM: %lu MB", ram_size_mb);
+    graphics_print(300, fb.height - 18, ram_str, 0xFFFFFF);
 
     //wyświetlanie po prawej stronie aktualnego czasu
     // Pobieramy czas z get_time() (z kernel.h)

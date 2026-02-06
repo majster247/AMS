@@ -15,7 +15,7 @@ SRCS = src/kernel.cpp src/arch/x86_64/idt.cpp src/drivers/keyboard.cpp \
        src/tasking/scheduler.cpp src/fs/vfs.cpp src/shell.cpp src/drivers/pci.cpp \
        src/drivers/ahci.cpp src/fs/ext2.cpp src/drivers/graphics.cpp src/graphics_utils.cpp \
 	   src/drivers/font_data.cpp src/drivers/wallpaper_data.cpp \
-	   src/drivers/mouse.cpp src/drivers/gui/window.cpp
+	   src/drivers/mouse.cpp src/drivers/gui/gui.cpp
 OBJS = build/start.o \
        build/tasking/interrupts.o \
        $(patsubst src/%.cpp, build/%.o, $(SRCS))
@@ -61,10 +61,12 @@ ams.iso: kernel.elf
 
 # POPRAWIONE URUCHAMIANIE Z AHCI
 run: all
-	qemu-system-x86_64 -cdrom ams.iso -serial stdio \
+	qemu-system-x86_64 -enable-kvm -m 4G -cdrom ams.iso -serial stdio \
 		-drive id=disk,file=disk.img,if=none,format=raw,readonly=off \
 		-device ich9-ahci,id=ahci \
 		-device ide-hd,drive=disk,bus=ahci.0 \
+		-vga vmware \
+        -display sdl,gl=on \
 		-no-reboot -no-shutdown -d int,cpu_reset -D qemu.log 
 
 clean:

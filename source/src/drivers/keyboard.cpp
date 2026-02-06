@@ -23,40 +23,40 @@
 
     static bool shift_pressed = false;
 
-    volatile char cmd_buffer[128];
+    volatile uint8_t cmd_buffer[128];
     volatile int cmd_index = 0;
     volatile bool line_ready = false;
+    volatile uint8_t kb_buffer[256];
+    volatile uint32_t kb_read_ptr = 0;
+    volatile uint32_t kb_write_ptr = 0;
+    volatile uint32_t KB_BUFFER_SIZE = 256;
 
-extern "C" void keyboard_handler() {
+extern "C" void keyboard_handler(struct regs *r) {
         uint8_t scancode = inb(0x60);
 
-        if (scancode == 0x2A || scancode == 0x36) { // Left/Right Shift pressed
+        // Obsługa Shift
+        if (scancode == 0x2A || scancode == 0x36) {
             shift_pressed = true;
             return;
-        }
-        if (scancode == 0xAA || scancode == 0xB6) { // Left/Right Shift released
+        } else if (scancode == 0xAA || scancode == 0xB6) {
             shift_pressed = false;
             return;
         }
-        if (scancode < 0x80) { // Key pressed
-            char c = shift_pressed ? scancode_to_ascii_shift[scancode] : scancode_to_ascii[scancode];
-            if (c) {
-                if (c == '\n') {
-                    line_ready = true;
-                } else if (c == '\b') {
-                    if (cmd_index > 0) {
-                        cmd_index--;
-                        cmd_buffer[cmd_index] = '\0';
-                        terminal_putchar('\b');
-                    }
-                } else if (c != 0 && cmd_index < 127) {
-                    cmd_buffer[cmd_index++] = c;
-                    cmd_buffer[cmd_index] = '\0';
-                    terminal_putchar(c);
-                }
-            }
+
+        // Jeśli klawisz został zwolniony, ignorujemy go
+        if (scancode & 0x80) {
+            return;
         }
-        outb(0x20, 0x20); 
+
+        char ascii_char = shift_pressed ? scancode_to_ascii_shift[scancode] : scancode_to_ascii[scancode];
+        
+        if (ascii_char) {
+            kb_buffer[kb_write_ptr] = ascii_char;
+            kb_write_ptr = (kb_write_ptr + 1) % KB_BUFFER_SIZE;
+
+            // Echo do terminala
+            terminal_putchar(ascii_char);
+        }    
     }
 
     void keyboard_init() {
@@ -69,19 +69,12 @@ extern "C" void keyboard_handler() {
     }
 
     uint8_t keyboard_get_char() {
-        while (!line_ready) {
-            asm volatile("hlt"); 
+        if (kb_read_ptr == kb_write_ptr) {
+            return 0; // Pusto
         }
-        char c = cmd_buffer[0];
-        // Przesuń bufor w lewo
-        for (int i = 0; i < cmd_index - 1; i++) {
-            cmd_buffer[i] = cmd_buffer[i + 1];
-        }
-        cmd_index--;
-        cmd_buffer[cmd_index] = '\0';
-        if (cmd_index == 0) {
-            line_ready = false;
-        }
+
+        char c = kb_buffer[kb_read_ptr];
+        kb_read_ptr = (kb_read_ptr + 1) % KB_BUFFER_SIZE;
         return c;
     }
 

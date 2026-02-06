@@ -19,6 +19,16 @@ extern "C" {
     void terminal_writestring_at(const char* data, int x, int y);
     void terminal_write_dec(uint32_t val);
     void idt_init();
+
+
+
+
+    //Keyboard
+    //kb_read_ptr i kb_write_ptr to indeksy do bufora klawiatury
+    extern volatile uint32_t kb_read_ptr;
+    extern volatile uint32_t kb_write_ptr;
+    extern volatile uint8_t kb_buffer[256];
+    extern volatile uint32_t KB_BUFFER_SIZE;
     void keyboard_init();
     uint8_t keyboard_get_char(); // Zwraca znak z klawiatury (blokujące)
     uint8_t keyboard_get_char_nonblocking(); // Zwraca znak z klawiatury (nieblokujące)
@@ -51,6 +61,9 @@ extern "C" {
     
     void* memset(void* dest, int ch, size_t count);
     void* memcpy(void* dest, const void* src, size_t count);
+    extern "C" void fast_memcpy64(void* dst, const void* src, uint64_t count);
+    void sprintf(char* buffer, const char* format, ...);
+
 
 
     //time and random

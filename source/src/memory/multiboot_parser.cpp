@@ -46,6 +46,9 @@ struct multiboot_tag_framebuffer {
     uint16_t reserved;
 };
 
+//ram size z multiboota
+uint64_t ram_size_mb = 0;
+
 
 extern "C" void pmm_mark_free(uint64_t start, uint64_t size);
 
@@ -129,4 +132,25 @@ extern "C" void parse_multiboot(uint64_t addr) {
     }
 
     write_serial_string("[MEM] Parsing finished.\n");
+    // Po parsingu zapisz ile RAM mamy
+    uint64_t total_bytes = 0; // Używamy bajtów dla precyzji
+    tag_ptr = (uint8_t*)(addr + 8);
+    while (tag_ptr < (uint8_t*)(addr + total_size)) {
+        multiboot_tag* tag = (multiboot_tag*)tag_ptr;
+        if (tag->type == 0) break;
+
+        if (tag->type == 6) {
+            multiboot_tag_mmap* mmap = (multiboot_tag_mmap*)tag;
+            uint32_t num_entries = (mmap->size - 16) / mmap->entry_size;
+
+            for (uint32_t i = 0; i < num_entries; i++) {
+                multiboot_mmap_entry* entry = (multiboot_mmap_entry*)((uint8_t*)mmap->entries + (i * mmap->entry_size));
+                if (entry->type == 1) { // AVAILABLE
+                    total_bytes += entry->len; // SUMUJEMY długość bloku
+                }
+            }
+        }
+        tag_ptr += (tag->size + 7) & ~7;
+    }
+    ram_size_mb = total_bytes / (1024 * 1024);
 }

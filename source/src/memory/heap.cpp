@@ -47,3 +47,49 @@ extern "C" void kfree(void* ptr) {
     (void)ptr; 
 }
 
+//mallok i free są bardzo proste, ale nie obsługują zwalniania pamięci ani ponownego używania.
+extern "C" void* malloc(size_t size) {
+    return kmalloc(size);
+}
+
+extern "C" void free(void* ptr) {
+    kfree(ptr);
+}
+
+void* operator new(size_t size) {
+    extern void* kmalloc(size_t size);
+    extern void write_serial_string(const char*); // Or whatever your debug function is
+    
+    void* ptr = kmalloc(size);
+    if (ptr == nullptr) {
+        write_serial_string("PANIC: operator new returned NULL! Heap full or broken.\n");
+        while(1) asm volatile("hlt");
+    }
+    return ptr;
+}
+
+void* operator new[](size_t size) {
+    extern void* kmalloc(size_t size);
+    return kmalloc(size);
+}
+
+// Zwykły delete
+void operator delete(void* p) {
+    // kfree(p); // Odkomentuj jak zaimplementujesz kfree w heap.cpp
+}
+
+// Zwykły delete []
+void operator delete[](void* p) {
+    // kfree(p);
+}
+
+// === TO JEST TO, CZEGO BRAKUJE (Sized Delete) ===
+void operator delete(void* p, size_t size) {
+    (void)size; // Nie używamy rozmiaru, uciszamy warning
+    // kfree(p); 
+}
+
+void operator delete[](void* p, size_t size) {
+    (void)size;
+    // kfree(p);
+}

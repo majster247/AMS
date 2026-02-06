@@ -1,7 +1,9 @@
 #include <stdint.h>
+#include <stdarg.h>
 #include "kernel.h"
 #include "io.h"
 #include "task.h"
+#include "heap.h"
 
 static char hex_buffer[20]; // 0x + 16 znaków + null terminator
 
@@ -72,7 +74,7 @@ void timer_handler() {
     system_ticks++;
 }
 
-
+ // 
 
 #define CMOS_ADDR 0x70
 #define CMOS_DATA 0x71
@@ -108,3 +110,146 @@ void sleep(uint32_t ms) {
     }
 }
 
+//sprintf trzeba w końcu napisać w całości
+void sprintf(char* buffer, const char* format, ...) {
+    // Prosta implementacja obsługująca tylko %d i %s oraz %x i %u i %lu oraz %f
+    const char* traverse = format;
+    char* buf_ptr = buffer;
+
+    va_list args;
+    va_start(args, format);
+
+    while (*traverse) {
+        if (*traverse == '%') {
+            traverse++;
+            if (*traverse == 'd') {
+                int num = va_arg(args, int);
+                // Konwersja int na string (bez sprintf)
+                char num_buffer[12]; // -2147483648 do 2147483647
+                int num_len = 0;
+                if (num < 0) {
+                    *buf_ptr++ = '-';
+                    num = -num;
+                }
+                do {
+                    num_buffer[num_len++] = '0' + (num % 10);
+                    num /= 10;
+                } while (num > 0);
+                for (int i = num_len - 1; i >= 0; i--) {
+                    *buf_ptr++ = num_buffer[i];
+                }
+            } else if (*traverse == 's') {
+                const char* str_arg = va_arg(args, const char*);
+                while (*str_arg) {
+                    *buf_ptr++ = *str_arg++;
+                }
+            } else if (*traverse == 'x') {
+                unsigned int num = va_arg(args, unsigned int);
+                char num_buffer[9]; // 8 znaków + null terminator
+                int num_len = 0;
+                do {
+                    int digit = num & 0xF;
+                    num_buffer[num_len++] = "0123456789ABCDEF"[digit];
+                    num >>= 4;
+                } while (num > 0);
+                for (int i = num_len - 1; i >= 0; i--) {
+                    *buf_ptr++ = num_buffer[i];
+                }
+            } else if (*traverse == 'u') {
+                unsigned int num = va_arg(args, unsigned int);
+                char num_buffer[11]; // max 10 cyfr + null terminator
+                int num_len = 0;
+                do {
+                    num_buffer[num_len++] = '0' + (num % 10);
+                    num /= 10;
+                } while (num > 0);
+                for (int i = num_len - 1; i >= 0; i--) {
+                    *buf_ptr++ = num_buffer[i];
+                }
+            } else if (*traverse == 'l' && *(traverse + 1) == 'u') {
+                traverse++; // Skip 'l'
+                unsigned long num = va_arg(args, unsigned long);
+                char num_buffer[21]; // max 20 digits for 64-bit + null terminator
+                int num_len = 0;
+                do {
+                    num_buffer[num_len++] = '0' + (num % 10);
+                    num /= 10;
+                } while (num > 0);
+                for (int i = num_len - 1; i >= 0; i--) {
+                    *buf_ptr++ = num_buffer[i];
+                }
+            }else if (*traverse == 'f') {
+                //niestety nie możemy używać va_arg bo nie ma SSE więc trzeba pobrać double jako uint64_t i bez używania va_arg
+                uint64_t num = 0; // na razie tak bo nie możemy użyć va_arg dla double bez SSE, więc musimy ręcznie pobrać 64 bity z argumentów
+                if (num < 0) {
+                    *buf_ptr++ = '-';
+                    num = -num;
+                }
+                int int_part = (int)num;
+                double frac_part = num - int_part;
+
+                // Konwersja części całkowitej
+                char int_buffer[12];
+                int int_len = 0;
+                do {
+                    int_buffer[int_len++] = '0' + (int_part % 10);
+                    int_part /= 10;
+                } while (int_part > 0);
+                for (int i = int_len - 1; i >= 0; i--) {
+                    *buf_ptr++ = int_buffer[i];
+                }
+
+                *buf_ptr++ = '.'; // Separator dziesiętny
+
+                // Konwersja części ułamkowej (2 miejsca po przecinku)
+                for (int i = 0; i < 2; i++) {
+                    frac_part *= 10;
+                    int digit = (int)frac_part;
+                    *buf_ptr++ = '0' + digit;
+                    frac_part -= digit;
+                }
+            } else {
+                // Nieobsługiwany specyfikator, po prostu go wypisz
+                *buf_ptr++ = '%';
+                *buf_ptr++ = *traverse;
+            }
+        } else {
+            *buf_ptr++ = *traverse;
+        }
+        traverse++;
+    }
+    *buf_ptr = '\0';
+    va_end(args);
+}
+
+//fast memcpy dla 64-bitowych wartości (np. do kopiowania bitmapy)
+//PO CO: bo memcpy jest strasznie wolny, a często kopiujemy duże bloki danych (np. tapetę)
+// i chcemy to robić jak najszybciej, zwłaszcza przy rysowaniu tapety czy okienek GUI
+
+//Jak to działa: zamiast kopiować bajt po bajcie, kopiujemy całe 64-bitowe słowa (8 bajtów) na raz. 
+//To jest znacznie szybsze, zwłaszcza dla dużych bloków danych. Oczywiście musimy upewnić się, 
+//że zarówno źródło, jak i cel są odpowiednio wyrównane (aligned), ale w naszym przypadku, 
+//gdy kopiujemy bitmapę do backbuffera, możemy to zagwarantować.
+
+//Przeskok w prędkości: PRZED: 1280x720x4 bajty = 3,686,400 operacji kopiowania bajt po bajcie. 
+//PO: 1280x720/8 = 115,200 operacji kopiowania słowo po słowie. 
+//To jest ogromna różnica i znacząco przyspiesza rysowanie tapety czy okienek GUI!
+
+// Kopiuje pamięć używając 64-bitowych rejestrów (8 bajtów na cykl + optymalizacje CPU)
+// count to liczba 64-bitowych słów (czyli liczba bajtów / 8)
+extern "C" void fast_memcpy64(void* dst, const void* src, uint64_t count) {
+    asm volatile (
+        "cld; rep movsq" 
+        : "+D" (dst), "+S" (src), "+c" (count) // Output registers
+        : // No input registers explicitly needed
+        : "memory" // Clobbers memory
+    );
+}
+
+
+extern "C" void __cxa_pure_virtual() {
+    // We can't use standard IO here usually, just hang or print to serial
+    extern void write_serial_string(const char*);
+    write_serial_string("CRASH: Pure Virtual Function Call!\n");
+    while (1) asm volatile("hlt");
+}
