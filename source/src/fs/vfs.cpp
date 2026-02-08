@@ -4,6 +4,7 @@
 
 // Musisz mieć funkcję kmalloc zadeklarowaną gdzieś
 extern "C" void* kmalloc(size_t size);
+extern "C" int strcmp(const char* s1, const char* s2);
 
 vfs_node* vfs_root = nullptr;
 extern uint64_t initrd_addr;
@@ -59,45 +60,34 @@ void vfs_init() {
 
 vfs_node* vfs_find(const char* name) {
     vfs_node* curr = vfs_root;
-
-
-    write_serial_string("Debug: ");
-    for(int i=0; i<10; i++) {
-        write_serial_hex(curr->name[i]);
-        write_serial_string(" ");
-    }
-    write_serial_string(" vs ");
-    for(int i=0; i<10; i++) {
-        write_serial_hex(name[i]);
-        write_serial_string(" ");
-    }
-    write_serial_string("\n");
+    
+    // Debug: Pokaż, że szukamy
+    // write_serial_string("[VFS] Szukam pliku: ");
+    // write_serial_string(name);
+    // write_serial_string("\n");
 
     while (curr) {
-        int i = 0;
-        while (name[i] == curr->name[i]) {
-            if (name[i] == '\0') return curr; // Znaleziono idealny mecz
-            i++;
+        // Bezpieczne sprawdzenie wskaźnika nazwy
+        if (curr->name[0] != '\0') {
+            if (strcmp(curr->name, name) == 0) {
+                // write_serial_string("[VFS] Znaleziono!\n");
+                return curr;
+            }
         }
         curr = curr->next;
     }
+    
+    // write_serial_string("[VFS] Nie znaleziono.\n");
     return nullptr;
 }
 
 uint32_t vfs_read(vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
-    if (node->read) {
+    if (node && node->read) {
         return node->read(node, offset, size, buffer);
     }
     return 0;
 }
 
 vfs_node* vfs_find_node(vfs_node* root, const char* name) {
-    vfs_node* curr = root;
-    while (curr) {
-        if (strcmp(curr->name, name) == 0) {
-            return curr;
-        }
-        curr = curr->next;
-    }
-    return nullptr;
+    return vfs_find(name); // Przekierowanie na naszą nową funkcję
 }

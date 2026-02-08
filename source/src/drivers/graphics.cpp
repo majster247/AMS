@@ -9,11 +9,15 @@ extern unsigned char IBM_VGA_8x16_bin[];
 extern unsigned char wallpaper_bmp[];
 
 uint32_t* backbuffer = nullptr;
+uint32_t fb_width = 0;
+uint32_t fb_height = 0;
 extern "C" {
 
 
 void graphics_init_double_buffer() {
-    uint64_t buffer_size = fb.width * fb.height * 4; // 4 bajty na piksel
+    fb_width = fb.width;  
+    fb_height = fb.height;
+    uint64_t buffer_size = fb_width * fb_height * 4; // 4 bajty na piksel
 
     backbuffer = (uint32_t*)malloc(buffer_size); // Dynamicznie alokowany backbuffer
     if(backbuffer == nullptr) {
@@ -337,3 +341,36 @@ void fill_screen(uint32_t color) {
         backbuffer[i] = color;
     }
 }
+
+
+void graphics_put_pixel_alpha(int x, int y, uint32_t color, uint8_t alpha) {
+    if (x < 0 || x >= (int)fb.width || y < 0 || y >= (int)fb.height) return;
+    
+    // Pobierz tło z backbuffera
+    uint32_t bg = backbuffer[y * fb.width + x];
+    
+    uint8_t r_bg = (bg >> 16) & 0xFF;
+    uint8_t g_bg = (bg >> 8) & 0xFF;
+    uint8_t b_bg = bg & 0xFF;
+    
+    uint8_t r_fg = (color >> 16) & 0xFF;
+    uint8_t g_fg = (color >> 8) & 0xFF;
+    uint8_t b_fg = color & 0xFF;
+    
+    // Szybka matematyka stałoprzecinkowa (dzielenie przez 255 -> >> 8)
+    uint8_t r = (r_fg * alpha + r_bg * (255 - alpha)) >> 8;
+    uint8_t g = (g_fg * alpha + g_bg * (255 - alpha)) >> 8;
+    uint8_t b = (b_fg * alpha + b_bg * (255 - alpha)) >> 8;
+    
+    backbuffer[y * fb.width + x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+}
+
+extern "C" void graphics_draw_rect_alpha(int x, int y, int w, int h, uint32_t color, uint8_t alpha) {
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            graphics_put_pixel_alpha(x + i, y + j, color, alpha);
+        }
+    }
+}
+
+

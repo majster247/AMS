@@ -63,47 +63,49 @@ struct ahci_command_header {
     uint32_t reserved1[4];
 } __attribute__((packed));
 
+// PANCERNA ZMIANA: Zwiększamy ilość wpisów PRDT
+// 128 wpisów pozwala na bardzo poszatkowane transfery (bezpieczeństwo DMA)
 struct ahci_command_table {
     uint8_t  cfis[64];
     uint8_t  acmd[16];
     uint8_t  reserved[48];
-    ahci_prdt_entry prdt_entry[1]; // Można zwiększyć dla większych transferów
+    ahci_prdt_entry prdt_entry[128]; 
 } __attribute__((packed));
 
 struct ahci_port {
-    uint32_t clb;
-    uint32_t clbu;
-    uint32_t fb;
-    uint32_t fbu;
-    uint32_t is;
-    uint32_t ie;
-    uint32_t cmd;
-    uint32_t reserved0;
-    uint32_t tfd;
-    uint32_t sig;
-    uint32_t ssts;
-    uint32_t sctl;
-    uint32_t serr;
-    uint32_t sact;
-    uint32_t ci;
-    uint32_t sntf;
-    uint32_t fbs;
-    uint32_t reserved1[11];
-    uint32_t vendor[4];
+    volatile uint32_t clb;
+    volatile uint32_t clbu;
+    volatile uint32_t fb;
+    volatile uint32_t fbu;
+    volatile uint32_t is;
+    volatile uint32_t ie;
+    volatile uint32_t cmd;
+    volatile uint32_t reserved0;
+    volatile uint32_t tfd;
+    volatile uint32_t sig;
+    volatile uint32_t ssts;
+    volatile uint32_t sctl;
+    volatile uint32_t serr;
+    volatile uint32_t sact;
+    volatile uint32_t ci;
+    volatile uint32_t sntf;
+    volatile uint32_t fbs;
+    volatile uint32_t reserved1[11];
+    volatile uint32_t vendor[4];
 } __attribute__((packed));
 
 struct ahci_hba_mem {
-    uint32_t cap;
-    uint32_t ghc;
-    uint32_t is;
-    uint32_t pi;
-    uint32_t vs;
-    uint32_t ccc_ctl;
-    uint32_t ccc_pts;
-    uint32_t em_loc;
-    uint32_t em_ctl;
-    uint32_t cap2;
-    uint32_t bohc;
+    volatile uint32_t cap;
+    volatile uint32_t ghc;
+    volatile uint32_t is;
+    volatile uint32_t pi;
+    volatile uint32_t vs;
+    volatile uint32_t ccc_ctl;
+    volatile uint32_t ccc_pts;
+    volatile uint32_t em_loc;
+    volatile uint32_t em_ctl;
+    volatile uint32_t cap2;
+    volatile uint32_t bohc;
     uint8_t  reserved[0xA0 - 0x2C];
     uint8_t  vendor[0x100 - 0xA0];
     ahci_port ports[32];

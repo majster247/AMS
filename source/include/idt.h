@@ -22,8 +22,14 @@ struct idtr {
     uint64_t base;
 } __attribute__((packed));
 
+
+// Definicja wskaźnika IDTR (tego brakowało!)
+struct idt_ptr {
+    uint16_t limit;
+    uint64_t base;
+} __attribute__((packed));
+
 //system ticks
 extern volatile uint64_t system_ticks;
 
 extern "C" void isr0_handler(); // Stub dla klawiatury w asm
-void timer_init(uint32_t hz);

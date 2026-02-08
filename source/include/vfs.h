@@ -12,6 +12,7 @@ struct vfs_node {
     uint32_t type;
     uint32_t size;
     uint64_t addr;      // Dla TAR: adres w RAM, Dla EXT2: numer Inody
+    uint64_t length;    // Długość pliku (dla katalogów może być 0)
     FS_SOURCE source;   // Skąd pochodzi plik?
     
     uint32_t (*read)(struct vfs_node*, uint32_t, uint32_t, uint8_t*);

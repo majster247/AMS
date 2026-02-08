@@ -253,3 +253,31 @@ extern "C" void __cxa_pure_virtual() {
     write_serial_string("CRASH: Pure Virtual Function Call!\n");
     while (1) asm volatile("hlt");
 }
+
+//__cxa_guard_release to funkcja wywoływana przez konstruktor statycznych obiektów C++ do zwolnienia mutexa po zakończeniu inicjalizacji.
+extern "C" int __cxa_guard_release(int* guard) {
+    // W prostym kernelu możemy po prostu ustawić wartość na 1, co oznacza, że obiekt został zainicjalizowany
+    *guard = 1;
+    return 1; // Zwracamy 1, aby poinformować, że inicjalizacja zakończyła się sukcesem
+}
+
+// __cxa_guard_acquire i __cxa_guard_abort są opcjonalne, ale można je zaimplementować, jeśli chcemy obsłużyć przypadki, gdy inicjalizacja obiektu statycznego nie powiedzie się (np. z powodu wyjątku). W naszym prostym kernelu możemy je pominąć lub zaimplementować jako no-op.
+extern "C" int __cxa_guard_acquire(int* guard) {
+    // Jeśli guard jest 0, to obiekt nie został jeszcze zainicjalizowany, więc próbujemy go zainicjalizować
+    // W prostym kernelu bez wielowątkowości możemy po prostu zwrócić 1, co oznacza, że możemy przejść do inicjalizacji
+    return (*guard == 0);
+}
+
+extern "C" void __cxa_guard_abort(int* guard) {
+    // Jeśli inicjalizacja obiektu statycznego nie powiedzie się, możemy ustawić guard na -1, aby oznaczyć, że inicjalizacja zakończyła się niepowodzeniem
+    *guard = -1;
+}
+
+
+uint64_t get_time_ms() {
+    // Prosta funkcja do zwracania czasu w ms od startu systemu
+    // Zakładamy, że system_ticks jest aktualizowany przez timer_handler
+    return (system_ticks * 1000) / hz;
+}
+
+

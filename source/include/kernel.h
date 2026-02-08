@@ -19,7 +19,8 @@ extern "C" {
     void terminal_writestring_at(const char* data, int x, int y);
     void terminal_write_dec(uint32_t val);
     void idt_init();
-
+    extern bool shift_pressed;
+    extern bool key_alt_pressed;
 
 
 
@@ -45,8 +46,8 @@ extern "C" {
 
     const char* to_hex(uint64_t val);
 
+    
     void parse_multiboot(uint64_t addr);
-
     void pmm_init(uint64_t mem_size, void* bitmap_address);
     void pmm_mark_free(uint64_t start, uint64_t size);
     void pmm_mark_used(uint64_t start, uint64_t size);
@@ -64,13 +65,26 @@ extern "C" {
     extern "C" void fast_memcpy64(void* dst, const void* src, uint64_t count);
     void sprintf(char* buffer, const char* format, ...);
 
-
+    extern uint64_t initrd_addr;
+    extern uint64_t initrd_end;
 
     //time and random
     int rand();
     void srand(unsigned int seed);
+    void timer_init(uint32_t freq);
 
     void get_time(int &h, int &m, int &s);
+    uint64_t get_time_ms();
+    extern "C" uint64_t get_system_ticks();
+
+    //cxa
+    int __cxa_guard_release(int* guard);
+    int __cxa_guard_acquire(int* guard);
+    void __cxa_guard_abort(int* guard);
+    void __cxa_pure_virtual();
+
+    void scheduler_add_user_task(void* entry, void* stack);
+
 
     //VGA COLORS
 

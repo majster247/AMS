@@ -76,6 +76,8 @@ struct ext2_directory_entry {
     char     name[];        // Nazwa (zmienna długość)
 } __attribute__((packed));
 
+extern struct vfs_node* ext2_root;
+
 // Funkcje eksportowane do VFS
 bool ext2_init(ahci_port* port);
 uint32_t ext2_read_node(struct vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer);

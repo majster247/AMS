@@ -21,7 +21,8 @@
         'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0, '*', 0, ' '
     };
 
-    static bool shift_pressed = false;
+    bool shift_pressed = false;
+    bool key_alt_pressed = false;
 
     volatile uint8_t cmd_buffer[128];
     volatile int cmd_index = 0;
@@ -40,6 +41,14 @@ extern "C" void keyboard_handler(struct regs *r) {
             return;
         } else if (scancode == 0xAA || scancode == 0xB6) {
             shift_pressed = false;
+            return;
+        }
+        else if (scancode == 0x38) { // Alt
+            key_alt_pressed = true;
+            return;
+        }
+        else if (scancode == 0xB8) { // Alt zwolniony
+            key_alt_pressed = false;
             return;
         }
 
@@ -63,9 +72,9 @@ extern "C" void keyboard_handler(struct regs *r) {
         // Odmaskuj IRQ1 w PIC1
         uint8_t mask = inb(0x21);
         outb(0x21, mask & ~0x02); 
-        write_serial_string("[KEY] IRQ1 Unmasked\n");
-        idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
-        write_serial_string("[KEY] Keyboard ISR registered at vector 33\n");
+        //write_serial_string("[KEY] IRQ1 Unmasked\n");
+        //idt_set_descriptor(33, (void*)isr_keyboard_stub, 0x8E);
+        //write_serial_string("[KEY] Keyboard ISR registered at vector 33\n");
     }
 
     uint8_t keyboard_get_char() {

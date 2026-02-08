@@ -1,95 +1,63 @@
-#include "vmm.h"
 #include "kernel.h"
 
-static uint64_t heap_start = 0; 
-static uint64_t heap_current = heap_start;
+// Zmienne statyczne
+static uint64_t heap_start = 0;
+static uint64_t heap_current = 0;
+static uint64_t heap_max = 0;
 
+extern "C" void pmm_mark_used(uint64_t start, uint64_t size);
+
+// Inicjalizacja: Kernel podaje bezpieczny adres (za initrd)
 extern "C" void heap_init(void* addr, uint64_t size) {
     heap_start = (uint64_t)addr;
+    // Wyrównanie do 2MB (dla porządku z VMM)
+    if (heap_start & 0x1FFFFF) {
+        heap_start = (heap_start + 0x1FFFFF) & ~0x1FFFFFULL;
+    }
+    
     heap_current = heap_start;
-    // Opcjonalnie: możesz tu od razu zmapować kilka stron, 
-    // żeby kmalloc nie musiał robić wszystkiego na raz.
-    //Mapuj pierwszą stronę
-    vmm_map(heap_start, heap_start, PAGE_PRESENT | PAGE_WRITABLE);
+    heap_max = heap_start + size;
 
-    write_serial_string("[HEAP] Zainicjalizowano na adresie: ");
-    write_serial_hex(heap_current);
+    write_serial_string("[HEAP] Start (Identity): ");
+    write_serial_hex(heap_start);
     write_serial_string("\n");
 }
 
-
 extern "C" void* kmalloc(size_t size) {
-    size = (size + 7) & ~7;
+    if (size == 0) return nullptr;
 
-    // Jeśli alokacja nie mieści się w obecnej stronie, przejdź na początek następnej
-    if ((heap_current & 0xFFF) + size > 0x1000) {
-        heap_current = (heap_current + 0xFFF) & ~0xFFFULL;
-    }
+    // Wyrównanie do 16 bajtów (dla SSE/AVX - ważne dla Minecrafta/Wideo!)
+    size = (size + 15) & ~15;
 
-    // Mapuj strony tak długo, aż całe żądanie 'size' będzie pokryte
-    uint64_t temp_addr = heap_current & ~0xFFFULL;
-    while (temp_addr < (heap_current + size)) {
-        // Tu powinieneś sprawdzić, czy strona jest już zmapowana (get_page_entry)
-        // Ale na szybko:
-        void* phys = pmm_alloc_frame();
-        vmm_map(temp_addr, (uint64_t)phys, PAGE_PRESENT | PAGE_WRITABLE);
-        temp_addr += 0x1000;
+    // Sprawdzenie limitu
+    if (heap_current + size > heap_max) {
+        write_serial_string("[HEAP] OOM! Brak pamieci na stercie!\n");
+        return nullptr;
     }
 
     void* ptr = (void*)heap_current;
+
+    // Zgłaszamy zajętość do PMM
+    // To zapobiega sytuacji, gdzie pmm_alloc_frame() zwróciłby ten sam RAM.
+    pmm_mark_used(heap_current, size);
+
     heap_current += size;
     return ptr;
 }
 
 extern "C" void kfree(void* ptr) {
-    // Na razie nic nie robimy - pancerna warstwa nie potrzebuje 
-    // odzyskiwać pamięci w fazie bootowania.
-    (void)ptr; 
+    (void)ptr;
+    // W Bump Allocatorze nie zwalniamy. 
+    // Do gier/Shell to wystarczy. Prawdziwe free wymagałoby listy wolnych bloków.
 }
 
-//mallok i free są bardzo proste, ale nie obsługują zwalniania pamięci ani ponownego używania.
-extern "C" void* malloc(size_t size) {
-    return kmalloc(size);
-}
+// Wrappery C++
+extern "C" void* malloc(size_t size) { return kmalloc(size); }
+extern "C" void free(void* ptr) { kfree(ptr); }
 
-extern "C" void free(void* ptr) {
-    kfree(ptr);
-}
-
-void* operator new(size_t size) {
-    extern void* kmalloc(size_t size);
-    extern void write_serial_string(const char*); // Or whatever your debug function is
-    
-    void* ptr = kmalloc(size);
-    if (ptr == nullptr) {
-        write_serial_string("PANIC: operator new returned NULL! Heap full or broken.\n");
-        while(1) asm volatile("hlt");
-    }
-    return ptr;
-}
-
-void* operator new[](size_t size) {
-    extern void* kmalloc(size_t size);
-    return kmalloc(size);
-}
-
-// Zwykły delete
-void operator delete(void* p) {
-    // kfree(p); // Odkomentuj jak zaimplementujesz kfree w heap.cpp
-}
-
-// Zwykły delete []
-void operator delete[](void* p) {
-    // kfree(p);
-}
-
-// === TO JEST TO, CZEGO BRAKUJE (Sized Delete) ===
-void operator delete(void* p, size_t size) {
-    (void)size; // Nie używamy rozmiaru, uciszamy warning
-    // kfree(p); 
-}
-
-void operator delete[](void* p, size_t size) {
-    (void)size;
-    // kfree(p);
-}
+void* operator new(size_t size) { return kmalloc(size); }
+void* operator new[](size_t size) { return kmalloc(size); }
+void operator delete(void* p) { kfree(p); }
+void operator delete[](void* p) { kfree(p); }
+void operator delete(void* p, size_t s) { (void)s; kfree(p); }
+void operator delete[](void* p, size_t s) { (void)s; kfree(p); }

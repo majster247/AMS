@@ -12,11 +12,15 @@ struct Framebuffer {
 };
 
 extern Framebuffer fb;
-
+//globalna zmienna width i height do przechowywania rozdzielczości (do łatwego dostępu)
+extern uint32_t fb_width;
+extern uint32_t fb_height;
 extern uint32_t* backbuffer;
 
 extern "C" {
     void graphics_put_pixel(int x, int y, uint32_t color);
+    void graphics_put_pixel_alpha(int x, int y, uint32_t color, uint8_t alpha);
+    void graphics_draw_rect_alpha(int x, int y, int w, int h, uint32_t color, uint8_t alpha);
     void graphics_clear_screen(uint32_t color);
     void graphics_draw_char(int x, int y, unsigned char c, uint32_t color);
     void graphics_print(int x, int y, const char* str, uint32_t color);
@@ -26,6 +30,8 @@ extern "C" {
     void graphics_draw_bmp_part(int x_start, int y_start, int w, int h);
     void graphics_init_double_buffer();
     void graphics_flip();
+
+
 
     void graphics_acquire();
     void graphics_release();
