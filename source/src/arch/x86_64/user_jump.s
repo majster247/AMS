@@ -3,6 +3,7 @@
 ; Eksportujemy symbole
 global jump_to_ring3
 global syscall_entry
+global force_stack_switch
 
 ; Importujemy handler C++
 extern syscall_handler
@@ -19,54 +20,95 @@ jump_to_ring3:
     mov fs, ax
     mov gs, ax      ; User GS
 
-    push 0x1B       ; SS
-    push rsi        ; RSP
+    push 0x1B       ; SS (User Data)
+    push rsi        ; RSP (User Stack)
     push 0x202      ; RFLAGS (Interrupts ON)
     push 0x23       ; CS (User Code Selector 0x20 | 3)
-    push rdi        ; RIP
+    push rdi        ; RIP (Program Entry)
     
-    iretq           ; Skok!
+    iretq           ; Skok do Ring 3!
 
 ; ---------------------------------------------------------
 ; Entry Point dla instrukcji SYSCALL
-; Tutaj procesor skacze z Ring 3 -> Ring 0 bez zmiany stosu!
 ; ---------------------------------------------------------
 syscall_entry:
-    ; 1. Zamień GS (User GS <-> Kernel GS)
-    ; Teraz GS wskazuje na naszą strukturę CpuData (ustawioną w gdt.cpp)
-    swapgs
+    swapgs          ; Zamień User GS na Kernel GS ( CpuData )
 
-    ; 2. Zapisz stos użytkownika w GS:0 (slot 'self' użyjemy tymczasowo jako scratch)
-    ;    lub po prostu w R12/R13 jeśli chcemy być szybcy, ale tu zrobimy bezpiecznie.
+    ; Zapisujemy stos użytkownika w strukturze CpuData (offset 0)
     mov [gs:0], rsp 
-
-    ; 3. Załaduj stos jądra z GS:8 (offset kernel_stack w CpuData)
+    ; Ładujemy bezpieczny stos jądra (offset 8)
     mov rsp, [gs:8]
 
-    ; 4. Przygotuj stos dla C++ (zgodnie z ABI)
-    push 0x1B       ; Old SS (User Data)
-    push qword [gs:0] ; Old RSP (User Stack)
-    push r11        ; Old RFLAGS (Syscall zapisuje RFLAGS w R11)
-    push 0x23       ; Old CS (User Code)
-    push rcx        ; Old RIP (Syscall zapisuje RIP powrotu w RCX)
-
-    ; 5. Wywołaj handler w C++
-    ; Argumenty w System V ABI: RDI, RSI, RDX, RCX, R8, R9
-    ; Nasz syscall: mov $1, rax; mov $msg, rdi
-    ; Przekażemy RAX (numer syscalla) jako pierwszy argument (RDI)
-    ; A RDI (tekst) jako drugi argument (RSI)
+    ; Budujemy strukturę 'registers' na stosie, aby pasowała do handlera C++
+    ; Musimy zachować kolejność zgodną z Twoją definicją struct registers
+    push 0x1B           ; ss
+    push qword [gs:0]   ; rsp (stary stos)
+    push r11            ; rflags (syscall kopiuje rflags do r11)
+    push 0x23           ; cs
+    push rcx            ; rip (syscall kopiuje rip do rcx)
     
-    mov rsi, rdi    ; Arg2 = Tekst (był w RDI)
-    mov rdi, rax    ; Arg1 = Numer syscalla (był w RAX)
+    push rax            ; error_code (dummy)
+    push 0x0            ; int_no (dummy)
+
+    ; Popychamy rejestry ogólnego przeznaczenia (r15 - r8, rbp - rax)
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rbp
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push rbx
+    push rax
+
+    ; Teraz RSP wskazuje na początek struktury 'registers'
+    mov rdi, rsp        ; Przekaż wskaźnik na registers jako pierwszy argument
     
     call syscall_handler
 
-    ; 6. Powrót do Ring 3
-    pop rcx         ; Przywróć RIP (do RCX dla sysret)
-    add rsp, 8      ; Pomiń CS (sysret ustawia go sam)
-    pop r11         ; Przywróć RFLAGS (do R11 dla sysret)
-    pop rsp         ; Przywróć User RSP
-    ; SS jest ignorowany przez sysret
+    ; Po powrocie z handlera odtwarzamy stan
+    pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
 
-    swapgs          ; Przywróć User GS
-    sysretq
+    ; Pomijamy int_no i error_code
+    add rsp, 16
+
+    ; Przygotowujemy powrót dla SYSRET
+    pop rcx             ; Odtwórz RIP do RCX
+    add rsp, 8          ; Pomiń CS
+    pop r11             ; Odtwórz RFLAGS do R11
+    pop rsp             ; Odtwórz User RSP
+
+    swapgs              ; Przywróć User GS
+    sysretq             ; Powrót do Ring 3!
+
+; ---------------------------------------------------------
+; Funkcja przełączania stosu (używana przy starcie GUI)
+; ---------------------------------------------------------
+force_stack_switch:
+    mov rsp, rdi    ; Ładujemy nowy stos
+    mov rbp, rsp    
+    sub rsp, 8      ; Wyrównanie dla ABI
+    call rsi        
+    .hang:
+        hlt
+        jmp .hang

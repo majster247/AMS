@@ -15,6 +15,7 @@ extern "C" {
     void vmm_map_user(uint64_t virt, uint64_t phys, bool writable);
     void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags); // Legacy wrapper
     void vmm_set_nocache(uint64_t virt);
+    uint64_t vmm_allocate_region(uint64_t size, uint64_t flags);
 
     //heap
     void heap_init(void* addr, uint64_t size);

@@ -67,12 +67,12 @@ bool ext2_get_inode(uint32_t inode_num, ext2_inode* out_inode) {
 }
 
 // Funkcja czytająca dane pliku (obsługa wskaźników)
-uint32_t ext2_read_node(vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
+uint64_t ext2_read_node(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer) {
     if (offset >= node->size) return 0;
     if (offset + size > node->size) size = node->size - offset;
 
-    uint32_t bytes_read = 0;
-    uint32_t ptrs_per_block = block_size / 4; 
+    uint64_t bytes_read = 0;
+    uint64_t ptrs_per_block = block_size / 4; 
 
     // Bufory cache dla bloków pośrednich
     uint32_t* indirect_buf = (uint32_t*)kmalloc(block_size);
@@ -200,6 +200,7 @@ bool ext2_init(ahci_port* port) {
                     memcpy(node->name, entry->name, entry->name_len);
                     node->name[entry->name_len] = 0;
 
+                    node->addr = (uint64_t)entry->inode;
                     // Pobierz detale pliku
                     ext2_inode fin;
                     ext2_get_inode(entry->inode, &fin);
@@ -207,6 +208,7 @@ bool ext2_init(ahci_port* port) {
                     node->size = fin.i_size;
                     node->type = (entry->file_type == 2) ? FS_DIRECTORY : FS_FILE;
                     node->read = ext2_read_node; // Przypisujemy driver!
+                    node->write = ext2_write;
                     for(int k=0; k<15; k++) node->blocks[k] = fin.i_block[k];
 
                     if (last) last->next = node;
@@ -223,4 +225,137 @@ bool ext2_init(ahci_port* port) {
     }
     kfree(dir_buf);
     return true;
+}
+
+char* ext2_read_file(const char* path) {
+    // 1. Znajdź węzeł pliku w VFS
+    // Uwaga: Zakładamy, że ext2_root jest globalnie dostępne (zadeklarowane w ext2.h)
+    vfs_node* node = vfs_find_node(ext2_root, path);
+    
+    if (!node) {
+        write_serial_string("[EXT2] Error: File not found: ");
+        write_serial_string(path);
+        write_serial_string("\n");
+        return nullptr;
+    }
+
+    // 2. Zaalokuj pamięć na cały plik
+    // node->size to rozmiar pliku w bajtach
+    char* buffer = (char*)kmalloc(node->size);
+    if (!buffer) {
+        write_serial_string("[EXT2] Error: Out of memory for file buffer.\n");
+        return nullptr;
+    }
+
+    // 3. Przeczytaj dane
+    // ext2_read_node to Twoja istniejąca funkcja czytająca z dysku
+    uint32_t bytes_read = ext2_read_node(node, 0, node->size, (uint8_t*)buffer);
+    
+    if (bytes_read != node->size) {
+        write_serial_string("[EXT2] Warning: Read fewer bytes than expected.\n");
+    }
+
+    return buffer;
+}
+
+void ext2_write_inode(uint32_t inode_num, ext2_inode* inode) {
+    if (inode_num == 0 || !g_port) return;
+
+    // Obliczamy gdzie na dysku leży ta inoda
+    uint32_t group = (inode_num - 1) / inodes_per_group;
+    uint32_t index = (inode_num - 1) % inodes_per_group;
+    uint32_t bgdt_start_block = (block_size == 1024) ? 2 : 1;
+    
+    uint8_t* bgdt_buf = (uint8_t*)kmalloc(block_size);
+    ext2_read_block(bgdt_start_block, bgdt_buf);
+    ext2_group_descriptor* gd = (ext2_group_descriptor*)bgdt_buf;
+    uint32_t inode_table_start = gd[group].bg_inode_table;
+    kfree(bgdt_buf);
+
+    uint32_t byte_offset = index * inode_size;
+    uint32_t block_offset = byte_offset / block_size;
+    uint32_t offset_in_block = byte_offset % block_size;
+
+    // Czytamy blok tabeli inod, modyfikujemy go i zapisujemy
+    uint8_t* buffer = (uint8_t*)kmalloc(block_size);
+    ext2_read_block(inode_table_start + block_offset, buffer);
+    
+    memcpy(buffer + offset_in_block, inode, sizeof(ext2_inode));
+    
+    // FIZYCZNY ZAPIS NA DYSK (używając odblokowanego ahci_write)
+    uint32_t sectors_per_block = block_size / 512;
+    ahci_write(g_port, (uint64_t)(inode_table_start + block_offset) * sectors_per_block, sectors_per_block, (uint16_t*)buffer);
+
+    kfree(buffer);
+}
+
+uint32_t ext2_allocate_block() {
+    uint32_t bitmap_block_num = 3; // To zależy od konfiguracji Twojego mkfs.ext2
+    uint8_t bitmap[4096];
+    
+    // 1. Czytamy bitmapę (używamy poprawnego sata_port)
+    ahci_read(g_port, bitmap_block_num * 8, 8, (uint16_t*)bitmap);
+
+    for (uint32_t i = 0; i < 4096; i++) {
+        if (bitmap[i] != 0xFF) {
+            for (int bit = 0; bit < 8; bit++) {
+                if (!(bitmap[i] & (1 << bit))) {
+                    bitmap[i] |= (1 << bit);
+                    
+                    // 2. Poprawiona literówka: ahci_write zamiast ahb_write
+                    ahci_write(g_port, bitmap_block_num * 8, 8, (uint16_t*)bitmap);
+                    return i * 8 + bit;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+uint64_t ext2_write(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer) {
+    uint32_t inode_num = (uint32_t)node->addr;
+    
+    write_serial_string("[EXT2] Zapis do Inody: ");
+    write_serial_dec(inode_num);
+    write_serial_string("\n");
+
+    if (inode_num == 0) {
+        write_serial_string("[EXT2] BLAD: Inoda 0 jest nieprawidlowa!\n");
+        return 0;
+    }
+
+    ext2_inode inode;
+    if (!ext2_get_inode(inode_num, &inode)) {
+        write_serial_string("[EXT2] BLAD: Nie mozna pobrac inody z dysku.\n");
+        return 0;
+    }
+
+    uint32_t block_index = offset / 4096;
+    
+    if (inode.i_block[block_index] == 0) {
+        write_serial_string("[EXT2] Alokacja nowego bloku...\n");
+        uint32_t new_block = ext2_allocate_block(); 
+        if (new_block == 0) return 0;
+        inode.i_block[block_index] = new_block;
+    }
+
+    uint64_t lba = inode.i_block[block_index] * 8; 
+    
+    // Zapisz dane (nadpisujemy 1 sektor = 512 bajtów)
+    // UWAGA: To jest trochę "brudne" (nadpisuje resztę sektora śmieciami z RAMu),
+    // ale do testu "czy działa" wystarczy. W przyszłości trzeba zrobić Read-Modify-Write.
+    if (!ahci_write(g_port, lba, 1, (uint16_t*)buffer)) {
+        write_serial_string("[EXT2] BLAD: AHCI Write failed.\n");
+        return 0;
+    }
+
+    if (offset + size > inode.i_size) {
+        inode.i_size = offset + size;
+        node->size = inode.i_size;
+    }
+
+    ext2_write_inode(inode_num, &inode);
+    write_serial_string("[EXT2] Zapis zakonczony sukcesem.\n");
+
+    return size;
 }

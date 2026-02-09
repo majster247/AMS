@@ -1,6 +1,7 @@
 #include "vmm.h"
 #include "kernel.h"
 #include "heap.h" 
+#include "task.h"
 
 #define PAGE_PRESENT  (1ULL << 0)
 #define PAGE_WRITABLE (1ULL << 1)
@@ -39,17 +40,16 @@ extern "C" {
 
     // Pobiera następną tablicę, tworzy jeśli brak.
     uint64_t* get_next_table(uint64_t* table, uint64_t index, uint64_t flags) {
-        if (!(table[index] & PAGE_PRESENT)) {
-            uint64_t* new_table = alloc_table();
-            if (!new_table) return nullptr;
-            // Wpis w katalogu dziedziczy flagi
-            table[index] = (uint64_t)new_table | PAGE_PRESENT | PAGE_WRITABLE | flags;
-        } else {
-            if (flags & PAGE_USER) table[index] |= PAGE_USER;
-            if (flags & PAGE_WRITABLE) table[index] |= PAGE_WRITABLE;
-        }
-        
-        return (uint64_t*)(table[index] & ~0xFFFULL);
+    if (!(table[index] & PAGE_PRESENT)) {
+        uint64_t* new_table = alloc_table();
+        if (!new_table) return nullptr;
+        // TUTAJ: Dodajemy PAGE_USER | PAGE_WRITABLE dla wszystkich poziomów pośrednich!
+        table[index] = (uint64_t)new_table | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+    } else {
+        // Upewnij się, że istniejąca ścieżka też ma bit USER
+        table[index] |= PAGE_USER;
+    }
+    return (uint64_t*)(table[index] & ~0xFFFULL);
     }
 
     // --- MAPOWANIE 4KB ---
@@ -106,7 +106,9 @@ extern "C" {
         write_serial_string("[VMM] Start mapowania Identity (0-4GB) na Huge Pages...\n");
 
         for (uint64_t phys = 0; phys < limit; phys += step) {
-            vmm_map_huge(phys, phys, PAGE_PRESENT | PAGE_WRITABLE);
+            // Musi być PAGE_USER, żeby Ring 3 widział kod ELFa i stos!
+            vmm_map_huge(phys, phys, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+            // Kernel map (high half) nie potrzebuje USER
             vmm_map_huge(phys + PHYSICAL_MEM_OFFSET, phys, PAGE_PRESENT | PAGE_WRITABLE);
         }
         
@@ -133,5 +135,39 @@ extern "C" {
         
         pd[pd_idx] |= (1<<4) | (1<<3);
         invlpg(virt);
+    }
+
+
+    // Znajduje wolny obszar wirtualny i mapuje tam fizyczne ramki
+    // size - rozmiar w bajtach (musi być wyrównany do 4096)
+    // flags - np. PAGE_USER | PAGE_WRITABLE
+    uint64_t vmm_allocate_region(uint64_t size, uint64_t flags) {
+        if (!current_task) return 0;
+
+        // 1. Pobierz aktualny "wierzchołek" pamięci procesu
+        uint64_t start_addr = current_task->virt_memory_top;
+
+        // 2. Oblicz ile stron potrzebujemy
+        uint64_t pages = (size + 4095) / 4096;
+
+        // 3. Dla każdej strony:
+        for (uint64_t i = 0; i < pages; i++) {
+            uint64_t phys = (uint64_t)pmm_alloc_frame();
+            if (!phys) {
+                // OOM (Out Of Memory)! W prawdziwym OS tutaj robimy cleanup.
+                return 0; 
+            }
+
+            // Mapujemy (virt -> phys)
+            vmm_map(start_addr + (i * 4096), phys, flags | PAGE_PRESENT | PAGE_USER);
+
+            // Zerujemy pamięć (ważne dla bezpieczeństwa!)
+            memset((void*)(start_addr + (i * 4096)), 0, 4096);
+        }
+
+        // 4. Przesuwamy wierzchołek
+        current_task->virt_memory_top += pages * 4096;
+
+        return start_addr;
     }
 }

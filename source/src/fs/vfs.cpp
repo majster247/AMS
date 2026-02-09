@@ -9,12 +9,12 @@ extern "C" int strcmp(const char* s1, const char* s2);
 vfs_node* vfs_root = nullptr;
 extern uint64_t initrd_addr;
 
-uint32_t tar_read(vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
+uint64_t tar_read(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer) {
     if (offset >= node->size) return 0;
     if (offset + size > node->size) size = node->size - offset;
 
     uint8_t* src = (uint8_t*)(node->addr + offset);
-    for (uint32_t i = 0; i < size; i++) {
+    for (uint64_t i = 0; i < size; i++) {
         buffer[i] = src[i];
     }
     return size;
@@ -47,6 +47,7 @@ void vfs_init() {
         node->size = size;
         node->addr = current_addr + 512;
         node->read = tar_read;
+        node->write = nullptr;
         node->next = nullptr;
 
         if (vfs_root == nullptr) vfs_root = node;
@@ -81,7 +82,7 @@ vfs_node* vfs_find(const char* name) {
     return nullptr;
 }
 
-uint32_t vfs_read(vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
+uint64_t vfs_read(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer) {
     if (node && node->read) {
         return node->read(node, offset, size, buffer);
     }
@@ -90,4 +91,10 @@ uint32_t vfs_read(vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffe
 
 vfs_node* vfs_find_node(vfs_node* root, const char* name) {
     return vfs_find(name); // Przekierowanie na naszą nową funkcję
+}
+
+uint64_t vfs_write(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer) {
+    if (node && node->write)
+        return node->write(node, offset, size, buffer);
+    return 0;
 }

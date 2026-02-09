@@ -11,19 +11,26 @@ struct vfs_node {
     char name[128];
     uint32_t type;
     uint32_t size;
-    uint64_t addr;      // Dla TAR: adres w RAM, Dla EXT2: numer Inody
-    uint64_t length;    // Długość pliku (dla katalogów może być 0)
-    FS_SOURCE source;   // Skąd pochodzi plik?
+    uint32_t current_pos;
+    uint64_t addr;      // Inode number
+    uint64_t length;    
+    FS_SOURCE source;   
     
-    uint32_t (*read)(struct vfs_node*, uint32_t, uint32_t, uint8_t*);
+    // --- ZMIANA NA uint64_t ---
+    uint64_t (*read)(struct vfs_node*, uint64_t, uint64_t, uint8_t*);
+    uint64_t (*write)(struct vfs_node*, uint64_t, uint64_t, uint8_t*);
+    // --------------------------
+    
     struct vfs_node* next;
-    uint32_t blocks[15]; // Dla EXT2: tablica bloków pliku
+    uint32_t blocks[15]; 
 };
 
 extern vfs_node* vfs_root;
 
-// Funkcje systemowe do użycia w Shellu
 void vfs_init();
 vfs_node* vfs_find(const char* name);
-uint32_t vfs_read(vfs_node* node, uint32_t offset, uint32_t size, uint8_t* buffer);
 vfs_node* vfs_find_node(vfs_node* start, const char* name);
+
+// Te też muszą być uint64_t
+uint64_t vfs_read(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer);
+uint64_t vfs_write(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer);
