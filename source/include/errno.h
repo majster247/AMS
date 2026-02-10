@@ -1,9 +1,16 @@
 #ifndef _ERRNO_H
 #define _ERRNO_H
-extern "C" int* __errno_location();
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int* __errno_location(void);
 #define errno (*__errno_location())
-#define EINTR  4
-#define EAGAIN 11
-#define ENOMEM 12
-#define EINVAL 22
+#define EINTR 4
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

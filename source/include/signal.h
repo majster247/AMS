@@ -7,4 +7,8 @@ typedef int sig_atomic_t;
 #define SIGFPE  8
 #define SIGSEGV 11
 #define SIGTERM 15
+
+#define REG_RIP 0
+#define REG_RBP 1
+
 #endif

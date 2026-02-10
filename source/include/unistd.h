@@ -25,3 +25,7 @@ void* sbrk(intptr_t increment);
 #endif
 
 #endif
+/* Ratunkowe deklaracje dla TCC */
+char *getcwd(char *buf, size_t size);
+int unlink(const char *pathname);
+extern char **environ;

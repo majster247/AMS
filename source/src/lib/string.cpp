@@ -123,14 +123,14 @@ char* strerror(int errnum) {
 
 // Te funkcje systemowe zazwyczaj są w unistd/stdlib, ale TCC czasem szuka ich "gdziebądź".
 // Zostawiamy je tu na razie, bo operują na stringach.
-
+/*
 char *realpath(const char *path, char *resolved_path) {
     if (resolved_path) {
         strcpy(resolved_path, path);
         return resolved_path;
     }
     return 0;
-}
+}*/
 
 char *getcwd(char *buf, size_t size) {
     if (size > 1) {
@@ -141,3 +141,6 @@ char *getcwd(char *buf, size_t size) {
 }
 
 } // extern "C"
+
+extern "C" char *getenv(const char *name) { return 0; }
+//extern "C" int atoi(const char *nptr) {  extern long strtol(const char*, char**, int); return (int)strtol(nptr, 0, 10); }

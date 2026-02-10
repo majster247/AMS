@@ -20,6 +20,8 @@
 
 #define USING_GLOBALS
 #include "tcc.h"
+#include <stdlib.h> // dla qsort, strtoull
+#include <stdio.h>  // dla fwrite, fdopen
 
 /********************************************************/
 /* global variables */
@@ -6879,6 +6881,9 @@ static void case_sort(struct switch_t *sw)
     struct case_t **p;
     if (sw->n < 2)
         return;
+    #include <stdlib.h> // dla qsort, strtoull
+    // Add qsort() declaration here to avoid implicit declaration warning on some platforms
+    extern void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
     qsort(sw->p, sw->n, sizeof *sw->p, case_cmp_qs);
     p = sw->p;
     while (p < sw->p + sw->n - 1) {

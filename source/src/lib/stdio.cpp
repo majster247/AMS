@@ -10,6 +10,15 @@ extern "C" size_t strlen(const char* s);
 
 extern "C" {
 
+static FILE __stdin = { 0, 0, 0, 0, 0 };  // FD 0 = Stdin
+static FILE __stdout = { 1, 0, 0, 0, 0 }; // FD 1 = Stdout
+static FILE __stderr = { 2, 0, 0, 0, 0 }; // FD 2 = Stderr
+
+FILE *stdin = &__stdin;
+FILE *stdout = &__stdout;
+FILE *stderr = &__stderr;
+
+
 FILE* fopen(const char* path, const char* mode) {
     int fd = open(path, 0); // Tu trzeba będzie kiedyś obsłużyć flagi mode
     if (fd < 0) return (FILE*)0; // Jawne zero lub rzutowanie

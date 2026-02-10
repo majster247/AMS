@@ -5,8 +5,10 @@
      DEF_ASM_OP0(cmc, 0xf5)
      DEF_ASM_OP0(lahf, 0x9f)
      DEF_ASM_OP0(sahf, 0x9e)
-     DEF_ASM_OP0(pushfq, 0x9c)
-     DEF_ASM_OP0(popfq, 0x9d)
+     DEF_ASM_OP0(pusha, 0x60)
+     DEF_ASM_OP0(popa, 0x61)
+     DEF_ASM_OP0(pushfl, 0x9c)
+     DEF_ASM_OP0(popfl, 0x9d)
      DEF_ASM_OP0(pushf, 0x9c)
      DEF_ASM_OP0(popf, 0x9d)
      DEF_ASM_OP0(stc, 0xf9)
@@ -26,26 +28,19 @@
      DEF_ASM_OP0(cwtl, 0x98)
      DEF_ASM_OP0(cwtd, 0x6699)
      DEF_ASM_OP0(cltd, 0x99)
-     DEF_ASM_OP0(cqto, 0x4899)
      DEF_ASM_OP0(int3, 0xcc)
      DEF_ASM_OP0(into, 0xce)
      DEF_ASM_OP0(iret, 0xcf)
-     DEF_ASM_OP0(iretw, 0x66cf)
-     DEF_ASM_OP0(iretl, 0xcf)
-     DEF_ASM_OP0(iretq, 0x48cf)
      DEF_ASM_OP0(rsm, 0x0faa)
      DEF_ASM_OP0(hlt, 0xf4)
-     DEF_ASM_OP0(wait, 0x9b)
      DEF_ASM_OP0(nop, 0x90)
      DEF_ASM_OP0(pause, 0xf390)
      DEF_ASM_OP0(xlat, 0xd7)
 
-    DEF_ASM_OP0L(vmcall, 0xc1, 0, OPC_0F01)
-    DEF_ASM_OP0L(vmlaunch, 0xc2, 0, OPC_0F01)
-    DEF_ASM_OP0L(vmresume, 0xc3, 0, OPC_0F01)
-    DEF_ASM_OP0L(vmxoff, 0xc4, 0, OPC_0F01)
+    /* Control-Flow Enforcement */
+    DEF_ASM_OP0L(endbr32, 0xf30f1e, 7, OPC_MODRM)
 
-     /* strings */
+    /* strings */
 ALT(DEF_ASM_OP0L(cmpsb, 0xa6, 0, OPC_BWLX))
 ALT(DEF_ASM_OP0L(scmpb, 0xa6, 0, OPC_BWLX))
 
@@ -65,7 +60,7 @@ ALT(DEF_ASM_OP0L(stosb, 0xaa, 0, OPC_BWLX))
 ALT(DEF_ASM_OP0L(sstob, 0xaa, 0, OPC_BWLX))
 
      /* bits */
-
+     
 ALT(DEF_ASM_OP2(bsfw, 0x0fbc, 0, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA, OPT_REGW))
 ALT(DEF_ASM_OP2(bsrw, 0x0fbd, 0, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA, OPT_REGW))
 
@@ -87,13 +82,19 @@ ALT(DEF_ASM_OP2(tzcntw, 0xf30fbc, 0, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA, OPT
 ALT(DEF_ASM_OP2(lzcntw, 0xf30fbd, 0, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA, OPT_REGW))
 
      /* prefixes */
+     DEF_ASM_OP0(wait, 0x9b)
+     DEF_ASM_OP0(fwait, 0x9b)
+     DEF_ASM_OP0(aword, 0x67)
+     DEF_ASM_OP0(addr16, 0x67)
+     ALT(DEF_ASM_OP0(word, 0x66))
+     DEF_ASM_OP0(data16, 0x66)
      DEF_ASM_OP0(lock, 0xf0)
      DEF_ASM_OP0(rep, 0xf3)
      DEF_ASM_OP0(repe, 0xf3)
      DEF_ASM_OP0(repz, 0xf3)
      DEF_ASM_OP0(repne, 0xf2)
      DEF_ASM_OP0(repnz, 0xf2)
-
+             
      DEF_ASM_OP0(invd, 0x0f08)
      DEF_ASM_OP0(wbinvd, 0x0f09)
      DEF_ASM_OP0(cpuid, 0x0fa2)
@@ -101,58 +102,39 @@ ALT(DEF_ASM_OP2(lzcntw, 0xf30fbd, 0, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA, OPT
      DEF_ASM_OP0(rdtsc, 0x0f31)
      DEF_ASM_OP0(rdmsr, 0x0f32)
      DEF_ASM_OP0(rdpmc, 0x0f33)
-
-     DEF_ASM_OP0(syscall, 0x0f05)
-     DEF_ASM_OP0(sysret, 0x0f07)
-     DEF_ASM_OP0L(sysretq, 0x480f07, 0, 0)
      DEF_ASM_OP0(ud2, 0x0f0b)
 
      /* NOTE: we took the same order as gas opcode definition order */
-/* Right now we can't express the fact that 0xa1/0xa3 can't use $eax and a 
-   32 bit moffset as operands.
 ALT(DEF_ASM_OP2(movb, 0xa0, 0, OPC_BWLX, OPT_ADDR, OPT_EAX))
-ALT(DEF_ASM_OP2(movb, 0xa2, 0, OPC_BWLX, OPT_EAX, OPT_ADDR)) */
+ALT(DEF_ASM_OP2(movb, 0xa2, 0, OPC_BWLX, OPT_EAX, OPT_ADDR))
 ALT(DEF_ASM_OP2(movb, 0x88, 0, OPC_MODRM | OPC_BWLX, OPT_REG, OPT_EA | OPT_REG))
 ALT(DEF_ASM_OP2(movb, 0x8a, 0, OPC_MODRM | OPC_BWLX, OPT_EA | OPT_REG, OPT_REG))
-/* The moves are special: the 0xb8 form supports IM64 (the only insn that
-   does) with REG64.  It doesn't support IM32 with REG64, it would use
-   the full movabs form (64bit immediate).  For IM32->REG64 we prefer
-   the 0xc7 opcode.  So disallow all 64bit forms and code the rest by hand. */
 ALT(DEF_ASM_OP2(movb, 0xb0, 0, OPC_REG | OPC_BWLX, OPT_IM, OPT_REG))
-ALT(DEF_ASM_OP2(mov,  0xb8, 0, OPC_REG, OPT_IM64, OPT_REG64))
-ALT(DEF_ASM_OP2(movq, 0xb8, 0, OPC_REG, OPT_IM64, OPT_REG64))
 ALT(DEF_ASM_OP2(movb, 0xc6, 0, OPC_MODRM | OPC_BWLX, OPT_IM, OPT_REG | OPT_EA))
 
 ALT(DEF_ASM_OP2(movw, 0x8c, 0, OPC_MODRM | OPC_WLX, OPT_SEG, OPT_EA | OPT_REG))
 ALT(DEF_ASM_OP2(movw, 0x8e, 0, OPC_MODRM | OPC_WLX, OPT_EA | OPT_REG, OPT_SEG))
 
-ALT(DEF_ASM_OP2(movw, 0x0f20, 0, OPC_MODRM | OPC_WLX, OPT_CR, OPT_REG64))
-ALT(DEF_ASM_OP2(movw, 0x0f21, 0, OPC_MODRM | OPC_WLX, OPT_DB, OPT_REG64))
-ALT(DEF_ASM_OP2(movw, 0x0f22, 0, OPC_MODRM | OPC_WLX, OPT_REG64, OPT_CR))
-ALT(DEF_ASM_OP2(movw, 0x0f23, 0, OPC_MODRM | OPC_WLX, OPT_REG64, OPT_DB))
+ALT(DEF_ASM_OP2(movw, 0x0f20, 0, OPC_MODRM | OPC_WLX, OPT_CR, OPT_REG32))
+ALT(DEF_ASM_OP2(movw, 0x0f21, 0, OPC_MODRM | OPC_WLX, OPT_DB, OPT_REG32))
+ALT(DEF_ASM_OP2(movw, 0x0f24, 0, OPC_MODRM | OPC_WLX, OPT_TR, OPT_REG32))
+ALT(DEF_ASM_OP2(movw, 0x0f22, 0, OPC_MODRM | OPC_WLX, OPT_REG32, OPT_CR))
+ALT(DEF_ASM_OP2(movw, 0x0f23, 0, OPC_MODRM | OPC_WLX, OPT_REG32, OPT_DB))
+ALT(DEF_ASM_OP2(movw, 0x0f26, 0, OPC_MODRM | OPC_WLX, OPT_REG32, OPT_TR))
 
-ALT(DEF_ASM_OP2(movsbw, 0x660fbe, 0, OPC_MODRM, OPT_REG8 | OPT_EA, OPT_REG16))
 ALT(DEF_ASM_OP2(movsbl, 0x0fbe, 0, OPC_MODRM, OPT_REG8 | OPT_EA, OPT_REG32))
-ALT(DEF_ASM_OP2(movsbq, 0x0fbe, 0, OPC_MODRM, OPT_REG8 | OPT_EA, OPT_REGW))
+ALT(DEF_ASM_OP2(movsbw, 0x660fbe, 0, OPC_MODRM, OPT_REG8 | OPT_EA, OPT_REG16))
 ALT(DEF_ASM_OP2(movswl, 0x0fbf, 0, OPC_MODRM, OPT_REG16 | OPT_EA, OPT_REG32))
-ALT(DEF_ASM_OP2(movswq, 0x0fbf, 0, OPC_MODRM, OPT_REG16 | OPT_EA, OPT_REG))
-ALT(DEF_ASM_OP2(movslq, 0x63, 0, OPC_MODRM, OPT_REG32 | OPT_EA, OPT_REG))
 ALT(DEF_ASM_OP2(movzbw, 0x0fb6, 0, OPC_MODRM | OPC_WLX, OPT_REG8 | OPT_EA, OPT_REGW))
 ALT(DEF_ASM_OP2(movzwl, 0x0fb7, 0, OPC_MODRM, OPT_REG16 | OPT_EA, OPT_REG32))
-ALT(DEF_ASM_OP2(movzwq, 0x0fb7, 0, OPC_MODRM, OPT_REG16 | OPT_EA, OPT_REG))
 
-ALT(DEF_ASM_OP1(pushq, 0x6a, 0, 0, OPT_IM8S))
-ALT(DEF_ASM_OP1(push, 0x6a, 0, 0, OPT_IM8S))
-ALT(DEF_ASM_OP1(pushw, 0x666a, 0, 0, OPT_IM8S))
-ALT(DEF_ASM_OP1(pushw, 0x50, 0, OPC_REG | OPC_WLX, OPT_REG64))
-ALT(DEF_ASM_OP1(pushw, 0x50, 0, OPC_REG | OPC_WLX, OPT_REG16))
-ALT(DEF_ASM_OP1(pushw, 0xff, 6, OPC_MODRM | OPC_WLX, OPT_REG64 | OPT_EA))
-ALT(DEF_ASM_OP1(pushw, 0x6668, 0, 0, OPT_IM16))
+ALT(DEF_ASM_OP1(pushw, 0x50, 0, OPC_REG | OPC_WLX, OPT_REGW))
+ALT(DEF_ASM_OP1(pushw, 0xff, 6, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA))
+ALT(DEF_ASM_OP1(pushw, 0x6a, 0, OPC_WLX, OPT_IM8S))
 ALT(DEF_ASM_OP1(pushw, 0x68, 0, OPC_WLX, OPT_IM32))
 ALT(DEF_ASM_OP1(pushw, 0x06, 0, OPC_WLX, OPT_SEG))
 
-ALT(DEF_ASM_OP1(popw, 0x58, 0, OPC_REG | OPC_WLX, OPT_REG64))
-ALT(DEF_ASM_OP1(popw, 0x58, 0, OPC_REG | OPC_WLX, OPT_REG16))
+ALT(DEF_ASM_OP1(popw, 0x58, 0, OPC_REG | OPC_WLX, OPT_REGW))
 ALT(DEF_ASM_OP1(popw, 0x8f, 0, OPC_MODRM | OPC_WLX, OPT_REGW | OPT_EA))
 ALT(DEF_ASM_OP1(popw, 0x07, 0, OPC_WLX, OPT_SEG))
 
@@ -191,7 +173,9 @@ ALT(DEF_ASM_OP2(testb, 0x84, 0, OPC_MODRM | OPC_BWLX, OPT_EA | OPT_REG, OPT_REG)
 ALT(DEF_ASM_OP2(testb, 0xa8, 0, OPC_BWLX, OPT_IM, OPT_EAX))
 ALT(DEF_ASM_OP2(testb, 0xf6, 0, OPC_MODRM | OPC_BWLX, OPT_IM, OPT_EA | OPT_REG))
 
+ALT(DEF_ASM_OP1(incw, 0x40, 0, OPC_REG | OPC_WLX, OPT_REGW))
 ALT(DEF_ASM_OP1(incb, 0xfe, 0, OPC_MODRM | OPC_BWLX, OPT_REG | OPT_EA))
+ALT(DEF_ASM_OP1(decw, 0x48, 0, OPC_REG | OPC_WLX, OPT_REGW))
 ALT(DEF_ASM_OP1(decb, 0xfe, 1, OPC_MODRM | OPC_BWLX, OPT_REG | OPT_EA))
 
 ALT(DEF_ASM_OP1(notb, 0xf6, 2, OPC_MODRM | OPC_BWLX, OPT_REG | OPT_EA))
@@ -225,15 +209,13 @@ ALT(DEF_ASM_OP2(shrdw, 0x0fad, 0, OPC_MODRM | OPC_WLX, OPT_REGW, OPT_EA | OPT_RE
 
 ALT(DEF_ASM_OP1(call, 0xff, 2, OPC_MODRM, OPT_INDIR))
 ALT(DEF_ASM_OP1(call, 0xe8, 0, 0, OPT_DISP))
-    DEF_ASM_OP1(callq, 0xff, 2, OPC_MODRM, OPT_INDIR)
-ALT(DEF_ASM_OP1(callq, 0xe8, 0, 0, OPT_DISP))
 ALT(DEF_ASM_OP1(jmp, 0xff, 4, OPC_MODRM, OPT_INDIR))
 ALT(DEF_ASM_OP1(jmp, 0xeb, 0, 0, OPT_DISP8))
 
+ALT(DEF_ASM_OP2(lcall, 0x9a, 0, 0, OPT_IM16, OPT_IM32))
 ALT(DEF_ASM_OP1(lcall, 0xff, 3, OPC_MODRM, OPT_EA))
+ALT(DEF_ASM_OP2(ljmp, 0xea, 0, 0, OPT_IM16, OPT_IM32))
 ALT(DEF_ASM_OP1(ljmp, 0xff, 5, OPC_MODRM, OPT_EA))
-    DEF_ASM_OP1(ljmpw, 0x66ff, 5, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(ljmpl, 0xff, 5, OPC_MODRM, OPT_EA)
 
 ALT(DEF_ASM_OP1(int, 0xcd, 0, 0, OPT_IM8))
 ALT(DEF_ASM_OP1(seto, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
@@ -241,8 +223,8 @@ ALT(DEF_ASM_OP1(setob, 0x0f90, 0, OPC_MODRM | OPC_TEST, OPT_REG8 | OPT_EA))
     DEF_ASM_OP2(enter, 0xc8, 0, 0, OPT_IM16, OPT_IM8)
     DEF_ASM_OP0(leave, 0xc9)
     DEF_ASM_OP0(ret, 0xc3)
-    DEF_ASM_OP0(retq, 0xc3)
-ALT(DEF_ASM_OP1(retq, 0xc2, 0, 0, OPT_IM16))
+    DEF_ASM_OP0(retl,0xc3)
+ALT(DEF_ASM_OP1(retl,0xc2, 0, 0, OPT_IM16))
 ALT(DEF_ASM_OP1(ret, 0xc2, 0, 0, OPT_IM16))
     DEF_ASM_OP0(lret, 0xcb)
 ALT(DEF_ASM_OP1(lret, 0xca, 0, 0, OPT_IM16))
@@ -253,8 +235,8 @@ ALT(DEF_ASM_OP1(jo, 0x70, 0, OPC_TEST, OPT_DISP8))
     DEF_ASM_OP1(loope, 0xe1, 0, 0, OPT_DISP8)
     DEF_ASM_OP1(loopz, 0xe1, 0, 0, OPT_DISP8)
     DEF_ASM_OP1(loop, 0xe2, 0, 0, OPT_DISP8)
-    DEF_ASM_OP1(jecxz, 0x67e3, 0, 0, OPT_DISP8)
-
+    DEF_ASM_OP1(jecxz, 0xe3, 0, 0, OPT_DISP8)
+     
      /* float */
      /* specific fcomp handling */
 ALT(DEF_ASM_OP0L(fcomp, 0xd8d9, 0, 0))
@@ -305,7 +287,6 @@ ALT(DEF_ASM_OP1(fiadds, 0xde, 0, OPC_FARITH | OPC_MODRM, OPT_EA))
      DEF_ASM_OP0(fninit, 0xdbe3)
      DEF_ASM_OP0(fnclex, 0xdbe2)
      DEF_ASM_OP0(fnop, 0xd9d0)
-     DEF_ASM_OP0(fwait, 0x9b)
 
     /* fp load */
     DEF_ASM_OP1(fld, 0xd9c0, 0, OPC_REG, OPT_ST)
@@ -317,7 +298,7 @@ ALT(DEF_ASM_OP1(fldl, 0xdd, 0, OPC_MODRM, OPT_EA))
     DEF_ASM_OP1(fildll, 0xdf, 5, OPC_MODRM,OPT_EA)
     DEF_ASM_OP1(fldt, 0xdb, 5, OPC_MODRM, OPT_EA)
     DEF_ASM_OP1(fbld, 0xdf, 4, OPC_MODRM, OPT_EA)
-
+    
     /* fp store */
     DEF_ASM_OP1(fst, 0xddd0, 0, OPC_REG, OPT_ST)
     DEF_ASM_OP1(fstl, 0xddd0, 0, OPC_REG, OPT_ST)
@@ -365,56 +346,38 @@ ALT(DEF_ASM_OP1(fstsw, 0xdd, 7, OPC_MODRM | OPC_FWAIT, OPT_EA ))
     DEF_ASM_OP1(ffreep, 0xdfc0, 4, OPC_REG, OPT_ST )
     DEF_ASM_OP1(fxsave, 0x0fae, 0, OPC_MODRM, OPT_EA )
     DEF_ASM_OP1(fxrstor, 0x0fae, 1, OPC_MODRM, OPT_EA )
-    /* The *q forms of fxrstor/fxsave use a REX prefix.
-       If the operand would use extended registers we would have to modify
-       it instead of generating a second one.  Currently that's no
-       problem with TCC, we don't use extended registers.  */
-    DEF_ASM_OP1(fxsaveq, 0x0fae, 0, OPC_MODRM | OPC_48, OPT_EA )
-    DEF_ASM_OP1(fxrstorq, 0x0fae, 1, OPC_MODRM | OPC_48, OPT_EA )
 
     /* segments */
     DEF_ASM_OP2(arpl, 0x63, 0, OPC_MODRM, OPT_REG16, OPT_REG16 | OPT_EA)
 ALT(DEF_ASM_OP2(larw, 0x0f02, 0, OPC_MODRM | OPC_WLX, OPT_REG | OPT_EA, OPT_REG))
     DEF_ASM_OP1(lgdt, 0x0f01, 2, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(lgdtq, 0x0f01, 2, OPC_MODRM, OPT_EA)
     DEF_ASM_OP1(lidt, 0x0f01, 3, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(lidtq, 0x0f01, 3, OPC_MODRM, OPT_EA)
     DEF_ASM_OP1(lldt, 0x0f00, 2, OPC_MODRM, OPT_EA | OPT_REG)
     DEF_ASM_OP1(lmsw, 0x0f01, 6, OPC_MODRM, OPT_EA | OPT_REG)
 ALT(DEF_ASM_OP2(lslw, 0x0f03, 0, OPC_MODRM | OPC_WLX, OPT_EA | OPT_REG, OPT_REG))
-    DEF_ASM_OP1(ltr, 0x0f00, 3, OPC_MODRM, OPT_EA | OPT_REG16)
+    DEF_ASM_OP1(ltr, 0x0f00, 3, OPC_MODRM, OPT_EA | OPT_REG)
     DEF_ASM_OP1(sgdt, 0x0f01, 0, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(sgdtq, 0x0f01, 0, OPC_MODRM, OPT_EA)
     DEF_ASM_OP1(sidt, 0x0f01, 1, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(sidtq, 0x0f01, 1, OPC_MODRM, OPT_EA)
     DEF_ASM_OP1(sldt, 0x0f00, 0, OPC_MODRM, OPT_REG | OPT_EA)
     DEF_ASM_OP1(smsw, 0x0f01, 4, OPC_MODRM, OPT_REG | OPT_EA)
-    DEF_ASM_OP1(str, 0x0f00, 1, OPC_MODRM, OPT_REG32 | OPT_EA)
-ALT(DEF_ASM_OP1(str, 0x660f00, 1, OPC_MODRM, OPT_REG16))
-ALT(DEF_ASM_OP1(str, 0x0f00, 1, OPC_MODRM | OPC_48, OPT_REG64))
+    DEF_ASM_OP1(str, 0x0f00, 1, OPC_MODRM, OPT_REG16| OPT_EA)
     DEF_ASM_OP1(verr, 0x0f00, 4, OPC_MODRM, OPT_REG | OPT_EA)
     DEF_ASM_OP1(verw, 0x0f00, 5, OPC_MODRM, OPT_REG | OPT_EA)
-    DEF_ASM_OP0L(swapgs, 0x0f01, 7, OPC_MODRM)
 
     /* 486 */
-    /* bswap can't be applied to 16bit regs */
     DEF_ASM_OP1(bswap, 0x0fc8, 0, OPC_REG, OPT_REG32 )
-    DEF_ASM_OP1(bswapl, 0x0fc8, 0, OPC_REG, OPT_REG32 )
-    DEF_ASM_OP1(bswapq, 0x0fc8, 0, OPC_REG | OPC_48, OPT_REG64 )
-
 ALT(DEF_ASM_OP2(xaddb, 0x0fc0, 0, OPC_MODRM | OPC_BWLX, OPT_REG, OPT_REG | OPT_EA ))
 ALT(DEF_ASM_OP2(cmpxchgb, 0x0fb0, 0, OPC_MODRM | OPC_BWLX, OPT_REG, OPT_REG | OPT_EA ))
     DEF_ASM_OP1(invlpg, 0x0f01, 7, OPC_MODRM, OPT_EA )
 
+    DEF_ASM_OP2(boundl, 0x62, 0, OPC_MODRM, OPT_REG32, OPT_EA)
+    DEF_ASM_OP2(boundw, 0x6662, 0, OPC_MODRM, OPT_REG16, OPT_EA)
+
     /* pentium */
     DEF_ASM_OP1(cmpxchg8b, 0x0fc7, 1, OPC_MODRM, OPT_EA )
-
-    /* AMD 64 */
-    DEF_ASM_OP1(cmpxchg16b, 0x0fc7, 1, OPC_MODRM | OPC_48, OPT_EA )
-
+    
     /* pentium pro */
 ALT(DEF_ASM_OP2(cmovo, 0x0f40, 0, OPC_MODRM | OPC_TEST | OPC_WLX, OPT_REGW | OPT_EA, OPT_REGW))
-
     DEF_ASM_OP2(fcmovb, 0xdac0, 0, OPC_REG, OPT_ST, OPT_ST0 )
     DEF_ASM_OP2(fcmove, 0xdac8, 0, OPC_REG, OPT_ST, OPT_ST0 )
     DEF_ASM_OP2(fcmovbe, 0xdad0, 0, OPC_REG, OPT_ST, OPT_ST0 )
@@ -432,17 +395,11 @@ ALT(DEF_ASM_OP2(cmovo, 0x0f40, 0, OPC_MODRM | OPC_TEST | OPC_WLX, OPT_REGW | OPT
     /* mmx */
     DEF_ASM_OP0(emms, 0x0f77) /* must be last OP0 */
     DEF_ASM_OP2(movd, 0x0f6e, 0, OPC_MODRM, OPT_EA | OPT_REG32, OPT_MMXSSE )
-    /* movd shouldn't accept REG64, but AMD64 spec uses it for 32 and 64 bit
-       moves, so let's be compatible. */
-ALT(DEF_ASM_OP2(movd, 0x0f6e, 0, OPC_MODRM, OPT_EA | OPT_REG64, OPT_MMXSSE ))
-ALT(DEF_ASM_OP2(movq, 0x0f6e, 0, OPC_MODRM | OPC_48, OPT_REG64, OPT_MMXSSE ))
-ALT(DEF_ASM_OP2(movq, 0x0f6f, 0, OPC_MODRM, OPT_EA | OPT_MMX, OPT_MMX ))
+    DEF_ASM_OP2(movq, 0x0f6f, 0, OPC_MODRM, OPT_EA | OPT_MMX, OPT_MMX )
 ALT(DEF_ASM_OP2(movd, 0x0f7e, 0, OPC_MODRM, OPT_MMXSSE, OPT_EA | OPT_REG32 ))
-ALT(DEF_ASM_OP2(movd, 0x0f7e, 0, OPC_MODRM, OPT_MMXSSE, OPT_EA | OPT_REG64 ))
 ALT(DEF_ASM_OP2(movq, 0x0f7f, 0, OPC_MODRM, OPT_MMX, OPT_EA | OPT_MMX ))
 ALT(DEF_ASM_OP2(movq, 0x660fd6, 0, OPC_MODRM, OPT_SSE, OPT_EA | OPT_SSE ))
 ALT(DEF_ASM_OP2(movq, 0xf30f7e, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE ))
-ALT(DEF_ASM_OP2(movq, 0x0f7e, 0, OPC_MODRM, OPT_MMXSSE, OPT_EA | OPT_REG64 ))
 
     DEF_ASM_OP2(packssdw, 0x0f6b, 0, OPC_MODRM, OPT_EA | OPT_MMXSSE, OPT_MMXSSE )
     DEF_ASM_OP2(packsswb, 0x0f63, 0, OPC_MODRM, OPT_EA | OPT_MMXSSE, OPT_MMXSSE )
@@ -509,12 +466,7 @@ ALT(DEF_ASM_OP2(movhps, 0x0f17, 0, OPC_MODRM, OPT_SSE, OPT_EA | OPT_REG32 ))
     DEF_ASM_OP2(addps, 0x0f58, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
     DEF_ASM_OP2(cvtpi2ps, 0x0f2a, 0, OPC_MODRM, OPT_EA | OPT_MMX, OPT_SSE )
     DEF_ASM_OP2(cvtps2pi, 0x0f2d, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_MMX )
-    DEF_ASM_OP2(cvtss2si, 0xf30f2d, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_REG32 )
-ALT(DEF_ASM_OP2(cvtss2si, 0xf30f2d, 0, OPC_MODRM | OPC_48, OPT_EA | OPT_SSE, OPT_REG64 ))
-    DEF_ASM_OP2(cvtsd2si, 0xf20f2d, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_REG32 )
-ALT(DEF_ASM_OP2(cvtsd2si, 0xf20f2d, 0, OPC_MODRM | OPC_48, OPT_EA | OPT_SSE, OPT_REG64 ))
     DEF_ASM_OP2(cvttps2pi, 0x0f2c, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_MMX )
-    DEF_ASM_OP2(andps, 0x0f54, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
     DEF_ASM_OP2(divps, 0x0f5e, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
     DEF_ASM_OP2(maxps, 0x0f5f, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
     DEF_ASM_OP2(minps, 0x0f5d, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
@@ -528,29 +480,8 @@ ALT(DEF_ASM_OP2(cvtsd2si, 0xf20f2d, 0, OPC_MODRM | OPC_48, OPT_EA | OPT_SSE, OPT
     DEF_ASM_OP2(rcpss, 0x0f53, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
     DEF_ASM_OP2(rsqrtps, 0x0f52, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
     DEF_ASM_OP2(sqrtps, 0x0f51, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
-    DEF_ASM_OP2(sqrtss, 0xf30f51, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
     DEF_ASM_OP2(subps, 0x0f5c, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE )
 
-    /* sse2 */
-    DEF_ASM_OP2(andpd, 0x660f54, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE)
-    DEF_ASM_OP2(sqrtsd, 0xf20f51, 0, OPC_MODRM, OPT_EA | OPT_SSE, OPT_SSE)
-
-    /* movnti should only accept REG32 and REG64, we accept more */
-    DEF_ASM_OP2(movnti, 0x0fc3, 0, OPC_MODRM, OPT_REG, OPT_EA)
-    DEF_ASM_OP2(movntil, 0x0fc3, 0, OPC_MODRM, OPT_REG32, OPT_EA)
-    DEF_ASM_OP2(movntiq, 0x0fc3, 0, OPC_MODRM | OPC_48, OPT_REG64, OPT_EA)
-    DEF_ASM_OP1(prefetchnta, 0x0f18, 0, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(prefetcht0, 0x0f18, 1, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(prefetcht1, 0x0f18, 2, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(prefetcht2, 0x0f18, 3, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP1(prefetchw, 0x0f0d, 1, OPC_MODRM, OPT_EA)
-    DEF_ASM_OP0L(lfence, 0x0fae, 5, OPC_MODRM)
-    DEF_ASM_OP0L(mfence, 0x0fae, 6, OPC_MODRM)
-    DEF_ASM_OP0L(sfence, 0x0fae, 7, OPC_MODRM)
-    DEF_ASM_OP1(clflush, 0x0fae, 7, OPC_MODRM, OPT_EA)
-
-    /* Control-Flow Enforcement */
-    DEF_ASM_OP0L(endbr64, 0xf30f1e, 7, OPC_MODRM)
 #undef ALT
 #undef DEF_ASM_OP0
 #undef DEF_ASM_OP0L

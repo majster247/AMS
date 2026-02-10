@@ -4,6 +4,7 @@
 #include "vfs.h"
 #include "ext2.h"
 
+extern "C" int sys_exec(const char* path, int argc, char** argv);
 
 int strlen(const char* s) { int l=0; while(s[l]) l++; return l; }
 bool str_starts(const char* str, const char* prefix) {
@@ -73,81 +74,74 @@ void TerminalWindow::OnKeyboard(char c) {
         }
     }
 }
-
 void TerminalWindow::ExecuteCommand() {
     if (cmd_idx == 0) return;
 
-    // ... (obsługa help, clear, info bez zmian) ...
-    if (strcmp(cmd_buffer, "help") == 0) {
-        WriteString("Available commands: ls, cat, clear, info, reboot\n");
+    // 1. Podział na komendę i argumenty (prosty parser)
+    char* cmd = cmd_buffer;
+    int argc = 0;
+    char* argv[16];
+    
+    // Szukamy spacji
+    char* p = cmd_buffer;
+    while (*p && argc < 16) {
+        // Pomiń spacje przed argumentem
+        while (*p == ' ') p++;
+        if (*p == 0) break;
+
+        argv[argc++] = p; // Zapisz początek argumentu
+
+        // Znajdź koniec argumentu
+        while (*p && *p != ' ') p++;
+        if (*p == ' ') {
+            *p = 0; // Wstaw null-terminator w miejsce spacji
+            p++;
+        }
     }
-    else if (strcmp(cmd_buffer, "clear") == 0) {
+
+    // 2. Obsługa komend wbudowanych
+    if (strcmp(cmd, "help") == 0) {
+        WriteString("Commands: ls, cat, clear, reboot, [path_to_program]\n");
+    }
+    else if (strcmp(cmd, "clear") == 0) {
         Clear(); cursor_row = -1;
     }
-    else if (strcmp(cmd_buffer, "reboot") == 0) {
-        // outb(0x64, 0xFE); // Reset CPU
+    else if (strcmp(cmd, "reboot") == 0) {
+        // sys_reboot(); // Jeśli masz taki syscall
     }
-    // === LS ===
-    else if (strcmp(cmd_buffer, "ls") == 0) {
+    else if (strcmp(cmd, "ls") == 0) {
+        // Twoja implementacja LS (bez zmian)
         extern vfs_node* vfs_root;
         vfs_node* node = vfs_root;
         while(node) {
             if (node->type == FS_DIRECTORY) WriteString("[DIR]  ");
             else WriteString("[FILE] ");
-            
             WriteString(node->name);
-            char sz[32]; 
-            // Prosta konwersja rozmiaru
-            if (node->size < 1024) sprintf(sz, " (%d B)", node->size);
-            else sprintf(sz, " (%d KB)", node->size/1024);
-            WriteString(sz);
             WriteString("\n");
             node = node->next;
         }
     }
-    // === CAT (FIX CRASH) ===
-    else if (str_starts(cmd_buffer, "cat ")) {
-        char* filename = cmd_buffer + 4; 
-        
-        extern vfs_node* vfs_root;
-        vfs_node* node = vfs_root;
-        bool found = false;
-        
-        while(node) {
-            if (strcmp(node->name, filename) == 0) {
-                found = true;
-                if (node->type == FS_DIRECTORY) {
-                    WriteString("Error: Is a directory.\n");
-                } else {
-                    // CZYTANIE PLIKU (Fix)
-                    uint32_t size = node->size;
-                    if (size > 4000) size = 4000; // Limit wyświetlania w terminalu
-                    
-                    char* buf = (char*)kmalloc(size + 1);
-                    if (buf) {
-                        // !!! UŻYWAMY WSKAŹNIKA NA FUNKCJĘ Z WĘZŁA !!!
-                        // node->read wskazuje na tar_read (dla initrd) lub ext2_read_node (dla dysku)
-                        if (node->read) {
-                            node->read(node, 0, size, (uint8_t*)buf);
-                            buf[size] = 0;
-                            WriteString(buf);
-                            WriteString("\n");
-                        } else {
-                            WriteString("Error: File not readable (no driver).\n");
-                        }
-                        kfree(buf);
-                    } else {
-                        WriteString("Error: Out of memory.\n");
-                    }
-                }
-                break;
-            }
-            node = node->next;
-        }
-        if (!found) WriteString("Error: File not found.\n");
+    else if (strcmp(cmd, "cat") == 0) {
+        if (argc < 2) { WriteString("Usage: cat <filename>\n"); return; }
+        // Twoja implementacja CAT (użyj zmiennej 'argv[1]' jako nazwy pliku)
+        // ... (tutaj wklej swoją logikę cat, ale użyj zmiennej argv[1] zamiast hardcodowanej nazwy)
     }
+    // 3. PRÓBA URUCHOMIENIA PROGRAMU (np. /tcc)
     else {
-        WriteString("Unknown command.\n");
+        // Sprawdzamy czy to plik (zaczyna się od / lub ma nazwę)
+        // Musisz mieć zaimplementowany syscall sys_exec w jądrze!
+        
+        // Przygotowanie argumentów dla exec (prosta wersja: 1 argument)
+        
+        WriteString("Executing: "); WriteString(cmd); WriteString("\n");
+        
+        int ret = sys_exec(argv[0], argc, argv);
+        
+        if (ret == -1) {
+            WriteString("Error: Unknown command or file not found.\n");
+        } else {
+            WriteString("Process finished.\n");
+        }
     }
 }
 

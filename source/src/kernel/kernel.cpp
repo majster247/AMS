@@ -20,10 +20,61 @@ extern "C" void gdt_init();
 extern "C" void syscall_init();
 
 extern "C" void switch_to_kernel_stack(void* new_stack, void (*func)());
+extern void elf_load_file(const char* name);
 
 // GUI
-Desktop* desktop = nullptr;
+Desktop* main_desktop = nullptr;
 
+extern "C" int sys_exec(const char* path, int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    
+    write_serial_string("[SYSCALL] EXEC called with path: ");
+    write_serial_string(path);
+    write_serial_string("\n");
+    for(int i=0; i<argc; i++) {
+        write_serial_string("  argv[");
+        char idx_str[10];
+        // Prosta konwersja int -> string
+        int idx = 0, temp = i;
+        if (temp == 0) idx_str[idx++] = '0';
+        else {
+            char rev[10];
+            int rev_idx = 0;
+            while (temp > 0) {
+                rev[rev_idx++] = '0' + (temp % 10);
+                temp /= 10;
+            }
+            // Odwróć
+            while (rev_idx > 0) idx_str[idx++] = rev[--rev_idx];
+        }
+        idx_str[idx] = 0;
+        write_serial_string(idx_str);
+        write_serial_string("]: ");
+        write_serial_string(argv[i]);
+        write_serial_string("\n");
+
+    }
+    
+    return 0; // Sukces
+}
+
+extern "C" void enable_sse() {
+    uint64_t cr0;
+    uint64_t cr4;
+
+    // 1. Ustawienie CR0
+    asm volatile ("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1 << 2);  // Wyczyść bit EM (Emulation)
+    cr0 |= (1 << 1);   // Ustaw bit MP (Monitor Coprocessor)
+    asm volatile ("mov %0, %%cr0" :: "r"(cr0));
+
+    // 2. Ustawienie CR4
+    asm volatile ("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1 << 9);   // Ustaw bit OSFXSR (OS Support for FXSAVE and FXRSTOR)
+    cr4 |= (1 << 10);  // Ustaw bit OSXMMEXCPT (OS Support for Unmasked SIMD Floating-Point Exceptions)
+    asm volatile ("mov %0, %%cr4" :: "r"(cr4));
+}
 
 // Helper do logowania
 void log_step(const char* msg) {
@@ -36,14 +87,14 @@ void kmain_post_stack_switch() {
     asm volatile("sti"); // Włącz przerwania - TERAZ TIMER ZACZNIE BIĆ!
     log_step("GUI Loop starting...");
 
-    if (elf_load("hello.elf")) {
-        log_step("ELF zaladowany i czeka w kolejce.");
-    }
+    //if (elf_load("hello.elf")) {
+        //log_step("ELF zaladowany i czeka w kolejce.");
+    //}
 
     while(true) {
         // GUI kod...
-        desktop->Update(mouse_x, mouse_y, mouse_left_pressed);
-        desktop->Draw();
+        main_desktop->Update(mouse_x, mouse_y, mouse_left_pressed);
+        main_desktop->Draw();
         mouse_draw();
         graphics_flip();
         
@@ -82,6 +133,7 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     // 3. Inicjalizacja Tablic Systemowych
     gdt_init();     
     syscall_init();
+    enable_sse();
     
     scheduler_init_kernel_task();
 
@@ -109,9 +161,9 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     graphics_init_double_buffer();
     log_step("BOOT: Backbuffer zaalokowany.");
 
-    desktop = new Desktop();
-    desktop->Init();
-    desktop->AddWindow(new TerminalWindow(100, 100));
+    main_desktop = new Desktop();
+    main_desktop->Init();
+    main_desktop->AddWindow(new TerminalWindow(100, 100));
 
     log_step("BOOT: GUI Loop Start. Jeśli po tym nic nie ma - system wisi.");
 

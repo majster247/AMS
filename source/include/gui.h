@@ -142,6 +142,7 @@ public:
     void Update(int mx, int my, bool left_click);
     void Draw(); 
     void HandleKeyboard(char c);
+    //void HandleKey(char c);
 
     static void DrawFlatButton(int x, int y, int w, int h, const char* text, uint32_t bg_color, bool hover);
     static void DrawRoundedRect(int x, int y, int w, int h, int r, uint32_t color);

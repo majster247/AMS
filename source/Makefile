@@ -51,6 +51,7 @@ LIBC_OBJS := build/lib/crt0.o \
              build/lib/string.o \
              build/lib/ctype.o \
              build/lib/stdio.o \
+			 build/lib/stubs.o \
              build/lib/setjmp.o
 
 # =============================================================================
@@ -86,6 +87,10 @@ build/lib/%.o: src/lib/%.cpp
 	@mkdir -p build/lib
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
+build/lib/%.o: src/lib/%.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -c $< -o $@
+
 # 3. Aplikacja Testowa (hello_user)
 build/apps/hello_user.o: src/gui/apps/hello_user.cpp
 	@mkdir -p build/apps
@@ -120,25 +125,29 @@ disk.img: build/hello.elf build/tcc.elf
 	qemu-img create -f raw disk.img 500M
 	mkfs.ext2 -b 4096 disk.img
 	mkdir -p ./temp_mount
+
+# 1. NAJPIERW MONTUJEMY
 	sudo mount -o loop disk.img ./temp_mount
-	
-	# Kopiujemy programy
-	sudo cp build/hello.elf ./temp_mount/hello
+
+# 2. TERAZ TWORZYMY STRUKTURĘ KATALOGÓW NA ZAMONTOWANYM DYSKU
+	sudo mkdir -p ./temp_mount/usr/include
+
+# 3. TERAZ KOPIUJEMY PLIKI
+	sudo cp build/hello.elf ./temp_mount/hello.elf
 	sudo cp build/tcc.elf ./temp_mount/tcc
 	sudo cp src/apps/tcc/kupa.c ./temp_mount/kupa.c
-	
-	# Tworzymy plik testowy dla hello_user
-	sudo sh -c 'echo "AMS x64 suczko lecimy nie śpimy" > ./temp_mount/hello.txt'
-	
-	# Kopiujemy film jeśli istnieje
-	@if [ -f movie.vid ]; then \
-		echo "[DISK] Kopiowanie movie.vid..."; \
-		sudo cp movie.vid ./temp_mount/; \
-	fi
+	sudo cp -r include/* ./temp_mount/usr/include/
 
+# ... reszta (hello.txt, movie.vid) ...
+	sudo sh -c 'echo "AMS x64 suczko lecimy nie śpimy" > ./temp_mount/hello.txt'	
+	sleep 1
 	sudo sync
-	sudo umount -l ./temp_mount || true
-	rmdir ./temp_mount
+	sudo umount -d ./temp_mount || (sleep 1 && sudo umount -f ./temp_mount)
+	@if mountpoint -q ./temp_mount; then \
+        echo "Błąd: temp_mount nadal zamontowany!"; \
+    else \
+        rmdir ./temp_mount; \
+    fi
 
 ams.iso: kernel.elf
 	@echo "[ISO] Tworzenie obrazu bootowalnego..."

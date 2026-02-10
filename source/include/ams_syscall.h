@@ -21,6 +21,7 @@ void refresh_screen();
 // Dodajmy też mmap, bo TCC go szuka w syscallach
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset);
 int munmap(void* addr, size_t length);
+int sys_exec(const char* path, int argc, char** argv);
 
 #ifdef __cplusplus
 }

@@ -1290,6 +1290,7 @@ static void rt_getcontext(ucontext_t *uc, rt_frame *rc)
 /* ------------------------------------------------------------- */
 #ifndef _WIN32
 /* signal handler for fatal errors */
+#if 0
 static void sig_error(int signum, siginfo_t *siginf, void *puc)
 {
     rt_frame f;
@@ -1337,10 +1338,10 @@ static void sig_error(int signum, siginfo_t *siginf, void *puc)
 /* Generate a stack backtrace when a CPU exception occurs. */
 static void set_exception_handler(void)
 {
-    struct sigaction sigact;
+    /*struct sigaction sigact;
     /* install TCC signal handlers to print debug info on fatal
        runtime errors */
-    sigemptyset (&sigact.sa_mask);
+    /*sigemptyset (&sigact.sa_mask);
     sigact.sa_flags = SA_SIGINFO; //| SA_RESETHAND;
 #if 0//def SIGSTKSZ // this causes signals not to work at all on some (older) linuxes
     sigact.sa_flags |= SA_ONSTACK;
@@ -1354,17 +1355,15 @@ static void set_exception_handler(void)
 #if 0//def SIGSTKSZ
     /* This allows stack overflow to be reported instead of a SEGV */
     {
-        stack_t ss;
+        /*stack_t ss;
         static unsigned char stack[SIGSTKSZ] __attribute__((aligned(16)));
 
         ss.ss_sp = stack;
         ss.ss_size = SIGSTKSZ;
         ss.ss_flags = 0;
-        sigaltstack(&ss, NULL);
+        sigaltstack(&ss, NULL);*/
     }
-#endif
-}
-
+#endif /* !WIN32 */
 #else /* WIN32 */
 
 /* signal handler for fatal errors */

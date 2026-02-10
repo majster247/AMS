@@ -66,7 +66,7 @@ typedef uint16_t Elf32_Section;
 typedef uint16_t Elf64_Section;
 
 /* Type for version symbol information.  */
-typedef Elf32_Half Elf32_Versym;
+//typedef Elf32_Half Elf32_Versym;
 typedef Elf64_Half Elf64_Versym;
 
 
@@ -74,23 +74,6 @@ typedef Elf64_Half Elf64_Versym;
 
 #define EI_NIDENT (16)
 
-typedef struct
-{
-  unsigned char	e_ident[EI_NIDENT];	/* Magic number and other info */
-  Elf32_Half	e_type;			/* Object file type */
-  Elf32_Half	e_machine;		/* Architecture */
-  Elf32_Word	e_version;		/* Object file version */
-  Elf32_Addr	e_entry;		/* Entry point virtual address */
-  Elf32_Off	e_phoff;		/* Program header table file offset */
-  Elf32_Off	e_shoff;		/* Section header table file offset */
-  Elf32_Word	e_flags;		/* Processor-specific flags */
-  Elf32_Half	e_ehsize;		/* ELF header size in bytes */
-  Elf32_Half	e_phentsize;		/* Program header table entry size */
-  Elf32_Half	e_phnum;		/* Program header table entry count */
-  Elf32_Half	e_shentsize;		/* Section header table entry size */
-  Elf32_Half	e_shnum;		/* Section header table entry count */
-  Elf32_Half	e_shstrndx;		/* Section header string table index */
-} Elf32_Ehdr;
 
 typedef struct
 {
@@ -285,19 +268,7 @@ typedef struct
 
 /* Section header.  */
 
-typedef struct
-{
-  Elf32_Word	sh_name;		/* Section name (string tbl index) */
-  Elf32_Word	sh_type;		/* Section type */
-  Elf32_Word	sh_flags;		/* Section flags */
-  Elf32_Addr	sh_addr;		/* Section virtual addr at execution */
-  Elf32_Off	sh_offset;		/* Section file offset */
-  Elf32_Word	sh_size;		/* Section size in bytes */
-  Elf32_Word	sh_link;		/* Link to another section */
-  Elf32_Word	sh_info;		/* Additional section information */
-  Elf32_Word	sh_addralign;		/* Section alignment */
-  Elf32_Word	sh_entsize;		/* Entry size if section holds table */
-} Elf32_Shdr;
+
 
 typedef struct
 {
@@ -395,15 +366,7 @@ typedef struct
 
 /* Symbol table entry.  */
 
-typedef struct
-{
-  Elf32_Word	st_name;		/* Symbol name (string tbl index) */
-  Elf32_Addr	st_value;		/* Symbol value */
-  Elf32_Word	st_size;		/* Symbol size */
-  unsigned char	st_info;		/* Symbol type and binding */
-  unsigned char	st_other;		/* Symbol visibility */
-  Elf32_Section	st_shndx;		/* Section index */
-} Elf32_Sym;
+
 
 typedef struct
 {
@@ -418,11 +381,7 @@ typedef struct
 /* The syminfo section if available contains additional information about
    every dynamic symbol.  */
 
-typedef struct
-{
-  Elf32_Half si_boundto;		/* Direct bindings, symbol bound to */
-  Elf32_Half si_flags;			/* Per symbol flags */
-} Elf32_Syminfo;
+
 
 typedef struct
 {
@@ -510,11 +469,7 @@ typedef struct
 
 /* Relocation table entry without addend (in section of type SHT_REL).  */
 
-typedef struct
-{
-  Elf32_Addr	r_offset;		/* Address */
-  Elf32_Word	r_info;			/* Relocation type and symbol index */
-} Elf32_Rel;
+
 
 /* I have seen two different definitions of the Elf64_Rel and
    Elf64_Rela structures, so we'll leave them out until Novell (or
@@ -529,12 +484,6 @@ typedef struct
 
 /* Relocation table entry with addend (in section of type SHT_RELA).  */
 
-typedef struct
-{
-  Elf32_Addr	r_offset;		/* Address */
-  Elf32_Word	r_info;			/* Relocation type and symbol index */
-  Elf32_Sword	r_addend;		/* Addend */
-} Elf32_Rela;
 
 typedef struct
 {
@@ -555,17 +504,7 @@ typedef struct
 
 /* Program segment header.  */
 
-typedef struct
-{
-  Elf32_Word	p_type;			/* Segment type */
-  Elf32_Off	p_offset;		/* Segment file offset */
-  Elf32_Addr	p_vaddr;		/* Segment virtual address */
-  Elf32_Addr	p_paddr;		/* Segment physical address */
-  Elf32_Word	p_filesz;		/* Segment size in file */
-  Elf32_Word	p_memsz;		/* Segment size in memory */
-  Elf32_Word	p_flags;		/* Segment flags */
-  Elf32_Word	p_align;		/* Segment alignment */
-} Elf32_Phdr;
+
 
 typedef struct
 {
@@ -661,15 +600,7 @@ typedef struct
 
 /* Dynamic section entry.  */
 
-typedef struct
-{
-  Elf32_Sword	d_tag;			/* Dynamic entry type */
-  union
-    {
-      Elf32_Word d_val;			/* Integer value */
-      Elf32_Addr d_ptr;			/* Address value */
-    } d_un;
-} Elf32_Dyn;
+
 
 typedef struct
 {
@@ -838,17 +769,7 @@ typedef struct
 
 /* Version definition sections.  */
 
-typedef struct
-{
-  Elf32_Half	vd_version;		/* Version revision */
-  Elf32_Half	vd_flags;		/* Version information */
-  Elf32_Half	vd_ndx;			/* Version Index */
-  Elf32_Half	vd_cnt;			/* Number of associated aux entries */
-  Elf32_Word	vd_hash;		/* Version name hash value */
-  Elf32_Word	vd_aux;			/* Offset in bytes to verdaux array */
-  Elf32_Word	vd_next;		/* Offset in bytes to next verdef
-					   entry */
-} Elf32_Verdef;
+
 
 typedef struct
 {
@@ -880,12 +801,7 @@ typedef struct
 
 /* Auxiliary version information.  */
 
-typedef struct
-{
-  Elf32_Word	vda_name;		/* Version or dependency names */
-  Elf32_Word	vda_next;		/* Offset in bytes to next verdaux
-					   entry */
-} Elf32_Verdaux;
+
 
 typedef struct
 {
@@ -897,16 +813,7 @@ typedef struct
 
 /* Version dependency section.  */
 
-typedef struct
-{
-  Elf32_Half	vn_version;		/* Version of structure */
-  Elf32_Half	vn_cnt;			/* Number of associated aux entries */
-  Elf32_Word	vn_file;		/* Offset of filename for this
-					   dependency */
-  Elf32_Word	vn_aux;			/* Offset in bytes to vernaux array */
-  Elf32_Word	vn_next;		/* Offset in bytes to next verneed
-					   entry */
-} Elf32_Verneed;
+
 
 typedef struct
 {
@@ -927,15 +834,7 @@ typedef struct
 
 /* Auxiliary needed version information.  */
 
-typedef struct
-{
-  Elf32_Word	vna_hash;		/* Hash value of dependency name */
-  Elf32_Half	vna_flags;		/* Dependency specific information */
-  Elf32_Half	vna_other;		/* Unused */
-  Elf32_Word	vna_name;		/* Dependency name string offset */
-  Elf32_Word	vna_next;		/* Offset in bytes to next vernaux
-					   entry */
-} Elf32_Vernaux;
+
 
 typedef struct
 {
@@ -961,17 +860,7 @@ typedef struct
    types are an arrangement between the exec server and the program
    interpreter, so we don't fully specify them here.  */
 
-typedef struct
-{
-  uint32_t a_type;		/* Entry type */
-  union
-    {
-      uint32_t a_val;		/* Integer value */
-      /* We use to have pointer elements added here.  We cannot do that,
-	 though, since it does not work when using 32-bit definitions
-	 on 64-bit platforms and vice versa.  */
-    } a_un;
-} Elf32_auxv_t;
+
 
 typedef struct
 {
@@ -1045,12 +934,7 @@ typedef struct
 /* Note section contents.  Each entry in the note section begins with
    a header of a fixed form.  */
 
-typedef struct
-{
-  Elf32_Word n_namesz;			/* Length of the note's name.  */
-  Elf32_Word n_descsz;			/* Length of the note's descriptor.  */
-  Elf32_Word n_type;			/* Type of the note.  */
-} Elf32_Nhdr;
+
 
 typedef struct
 {
@@ -1108,15 +992,7 @@ typedef struct
 #define NT_GNU_GOLD_VERSION	4
 
 
-/* Move records.  */
-typedef struct
-{
-  Elf32_Xword m_value;		/* Symbol value.  */
-  Elf32_Word m_info;		/* Size and index.  */
-  Elf32_Word m_poffset;		/* Symbol offset.  */
-  Elf32_Half m_repeat;		/* Repeat count.  */
-  Elf32_Half m_stride;		/* Stride info.  */
-} Elf32_Move;
+
 
 typedef struct
 {
@@ -1128,9 +1004,7 @@ typedef struct
 } Elf64_Move;
 
 /* Macro to construct move records.  */
-#define ELF32_M_SYM(info)	((info) >> 8)
-#define ELF32_M_SIZE(info)	((unsigned char) (info))
-#define ELF32_M_INFO(sym, size)	(((sym) << 8) + (unsigned char) (size))
+
 
 #define ELF64_M_SYM(info)	ELF32_M_SYM (info)
 #define ELF64_M_SIZE(info)	ELF32_M_SIZE (info)
@@ -1493,40 +1367,6 @@ typedef struct
 
 /* Entries found in sections of type SHT_MIPS_GPTAB.  */
 
-typedef union
-{
-  struct
-    {
-      Elf32_Word gt_current_g_value;	/* -G value used for compilation */
-      Elf32_Word gt_unused;		/* Not used */
-    } gt_header;			/* First entry in section */
-  struct
-    {
-      Elf32_Word gt_g_value;		/* If this value were used for -G */
-      Elf32_Word gt_bytes;		/* This many bytes would be used */
-    } gt_entry;				/* Subsequent entries in section */
-} Elf32_gptab;
-
-/* Entry found in sections of type SHT_MIPS_REGINFO.  */
-
-typedef struct
-{
-  Elf32_Word	ri_gprmask;		/* General registers used */
-  Elf32_Word	ri_cprmask[4];		/* Coprocessor registers used */
-  Elf32_Sword	ri_gp_value;		/* $gp register value */
-} Elf32_RegInfo;
-
-/* Entries found in sections of type SHT_MIPS_OPTIONS.  */
-
-typedef struct
-{
-  unsigned char kind;		/* Determines interpretation of the
-				   variable part of descriptor.  */
-  unsigned char size;		/* Size of descriptor, including header.  */
-  Elf32_Section section;	/* Section header index of section affected,
-				   0 for global options.  */
-  Elf32_Word info;		/* Kind-specific information.  */
-} Elf_Options;
 
 /* Values for `kind' field in Elf_Options.  */
 
@@ -1569,11 +1409,7 @@ typedef struct
 
 /* Entry found in `.options' section.  */
 
-typedef struct
-{
-  Elf32_Word hwp_flags1;	/* Extra flags.  */
-  Elf32_Word hwp_flags2;	/* Extra flags.  */
-} Elf_Options_Hw;
+
 
 /* Masks for `info' in ElfOptions for ODK_HWAND and ODK_HWOR entries.  */
 

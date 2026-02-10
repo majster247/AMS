@@ -3,17 +3,23 @@
 #include "ams_syscall.h"
 #include "ctype.h" // upewnij się, że masz ctype.h z isspace, isdigit, isalpha
 
+static uint64_t heap_current = 0x70000000;
+
 extern "C" {
 
+    char *__env_internal[] = { 0 }; 
+    char **environ = __env_internal;
+
 void* malloc(size_t size) {
-    if (size == 0) return NULL;
-    void* block = sbrk(size);
-    if ((uint64_t)block == (uint64_t)-1) return NULL;
-    return block;
+    void* addr = (void*)heap_current;
+    heap_current += size;
+    // Tutaj w wersji PRO powinieneś wołać syscall "sbrk" lub "mmap"
+    // Ale na start, skoro zmapowałeś 4GB jako Identity, to zadziała "na chama"
+    return addr;
 }
 
 void free(void* ptr) {
-    // Nadal nic, memory leak is fine for now :D
+    (void)ptr; // Na razie nic nie rób, niech przecieka - TCC i tak zaraz skończy
 }
 
 // Potrzebne dla TCC (nawet jako atrapy)

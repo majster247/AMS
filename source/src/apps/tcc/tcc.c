@@ -23,6 +23,22 @@
 #endif
 
 #include "tcc.h"
+#include <time.h>
+#include <stdlib.h> // dla qsort, strtoull
+#include <stdio.h>  // dla fwrite, fdopen
+
+#ifndef _TIME_H
+struct tm { int tm_sec; int tm_min; int tm_hour; int tm_mday; int tm_mon; int tm_year; int tm_wday; int tm_yday; int tm_isdst; };
+#endif
+
+struct tm *localtime(const time_t *timep);
+double ldexpl(double x, int exp);
+void gen_makedeps(TCCState *s, const char *target, const char *filename);
+int gettimeofday(struct timeval *tv, void *tz);
+char *realpath(const char *path, char *resolved_path);
+int tcc_tool_cross(char **argv, int optind) { return 0; }
+int tcc_tool_ar(int argc, char **argv) { return 0; }
+
 #if ONE_SOURCE
 # include "libtcc.c"
 #endif
@@ -426,3 +442,29 @@ redo:
         fclose(ppfp);
     return ret;
 }
+
+
+
+
+
+struct tm *localtime(const time_t *timep) {
+    static struct tm t = {0};
+    return &t; 
+}
+
+/* Matematyka (TCC rzadko tego używa, atrapa wystarczy na start) */
+double ldexpl(double x, int exp) { return x; } 
+
+/* Konwersja (jeśli brakuje w bibliotece) */
+#ifndef HAVE_ATOI
+int atoi(const char *nptr) {
+    return (int)strtol(nptr, (char **)0, 10);
+}
+#endif
+
+/* Ścieżki */
+char *realpath(const char *path, char *resolved_path) {
+    if(resolved_path) strcpy(resolved_path, path);
+    return resolved_path;
+}
+

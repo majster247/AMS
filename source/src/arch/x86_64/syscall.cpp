@@ -171,6 +171,25 @@ extern "C" void syscall_handler(registers* regs) {
             }
             break;
 
+        case 10: // SYS_EXEC
+            // path to arg0, argc to arg1...
+            // Wywołaj funkcję kernela: load_elf_program((const char*)arg0);
+            // return status;
+                {
+                    const char* path = (const char*)regs->rdi;
+                    int argc = (int)regs->rsi;
+                    char** argv = (char**)regs->rdx;
+    
+                    write_serial_string("[SYSCALL] Exec: ");
+                    write_serial_string(path);
+                    write_serial_string("\n");
+    
+                    // Tutaj musisz zaimplementować logikę ładowania programu ELF i tworzenia procesu
+                    // To jest duża funkcja, więc zostawiam Ci to do zrobienia. Na razie zwróćmy -1, żeby nie crashować.
+                    regs->rax = -1; 
+                }
+            break;
+
         case 12: // sys_brk
             {
                 uint64_t new_brk = regs->rdi;

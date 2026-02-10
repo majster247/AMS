@@ -21,7 +21,9 @@
 #ifndef ONE_SOURCE
 # define ONE_SOURCE 1
 #endif
-
+#include <stdlib.h> // dla qsort, strtoull, malloc, free
+#include <stdio.h>  // dla fwrite, fdopen, fopen
+#include <string.h> // dla memcpy, memset
 #if ONE_SOURCE
 #include "tccpp.c"
 #include "tccgen.c"
@@ -1424,7 +1426,7 @@ static int tcc_set_linker(TCCState *s, const char *optarg)
         } else if (link_option(&o, "e=") || link_option(&o, "entry=")) {
             tcc_set_str(&s->elf_entryname, o.arg);
         } else if (link_option(&o, "image-base=") || link_option(&o, "Ttext=")) {
-            s->text_addr = strtoull(o.arg, &end, 16);
+            s->text_addr = strtoul(o.arg, &end, 16);
             s->has_text_addr = 1;
         } else if (link_option(&o, "init=")) {
             tcc_set_str(&s->init_symbol, o.arg);

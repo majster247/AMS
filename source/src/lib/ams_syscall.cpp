@@ -22,6 +22,11 @@ void exit(int code) {
     while(1);
 }
 
+int sys_exec(const char* path, int argc, char** argv) {
+    // Zakładam, że EXEC ma numer np. 10 (sprawdź w syscall.cpp w jądrze)
+    return syscall(10, (uint64_t)path, (uint64_t)argc, (uint64_t)argv);
+}
+
 int write(int fd, const char* buf, int count) {
     return (int)syscall(1, fd, (uint64_t)buf, count);
 }

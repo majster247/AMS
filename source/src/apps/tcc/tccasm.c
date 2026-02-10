@@ -20,6 +20,8 @@
 
 #define USING_GLOBALS
 #include "tcc.h"
+#include <stdlib.h> // dla qsort, strtoull
+#include <stdio.h>  // dla fwrite, fdopen
 #ifdef CONFIG_TCC_ASM
 
 static Section *last_text_section; /* to handle .previous asm directive */
@@ -133,7 +135,7 @@ static void asm_expr_unary(TCCState *s1, ExprValue *pe)
     switch(tok) {
     case TOK_PPNUM:
         p = tokc.str.data;
-        n = strtoull(p, (char **)&p, 0);
+        n = strtoul(p, (char **)&p, 0);
         if (*p == 'b' || *p == 'f') {
             /* backward or forward label */
             label = asm_get_local_label_name(s1, n);

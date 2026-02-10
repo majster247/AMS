@@ -19,6 +19,8 @@
  */
 
 #include "tcc.h"
+#include <stdlib.h> // dla qsort, strtoull
+#include <stdio.h>  // dla fwrite, fdopen
 
 /* Define this to get some debug output during relocation processing.  */
 #undef DEBUG_RELOC
@@ -2654,6 +2656,10 @@ static int tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr)
     ehdr.e_shnum = shnum;
     ehdr.e_shstrndx = shnum - 1;
 
+    #include "../../../include/stdlib.h"
+    #include <stdio.h>  // dla fwrite, fdopen
+
+    
     offset = fwrite(&ehdr, 1, sizeof(ElfW(Ehdr)), f);
     if (phdr)
         offset += fwrite(phdr, 1, phnum * sizeof(ElfW(Phdr)), f);
@@ -2735,6 +2741,9 @@ static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
     else
         mode = 0777;
     unlink(filename);
+    #include "../../../include/stdlib.h"
+    #include "../../../include/string.h"
+    #include "../../../include/stdio.h"
     fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, mode);
     if (fd < 0 || (f = fdopen(fd, "wb")) == NULL)
         return tcc_error_noabort("could not write '%s: %s'", filename, strerror(errno));

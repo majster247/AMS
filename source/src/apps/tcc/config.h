@@ -3,6 +3,7 @@
 
 #define TCC_TARGET_X86_64 1
 #define TCC_VERSION "0.9.27-ams"
+#define CONFIG_TCC_STATIC 1
 #undef HAVE_SEMAPHORE_H
 
 // Gdzie TCC ma szukać plików nagłówkowych na dysku AMS?

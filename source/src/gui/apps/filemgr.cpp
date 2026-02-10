@@ -106,7 +106,7 @@ void FileManagerWindow::OpenFile(vfs_node* node) {
         if(node->name[i] == '.') ext = &node->name[i];
     }
 
-    extern Desktop* desktop;
+    extern Desktop* main_desktop; // Używamy globalnego wskaźnika do Desktopu, który jest inicjalizowany w kernel.cpp
 
     // Sprawdź czy node->size > 0. Jeśli nie, EXT2 driver może źle czytać inode
     if (node->size == 0) {
@@ -115,19 +115,19 @@ void FileManagerWindow::OpenFile(vfs_node* node) {
 
     if (ext) {
         if (strcmp(ext, ".vid") == 0) {
-            desktop->AddWindow(new VideoPlayerWindow(100, 100, node->name));
+            main_desktop->AddWindow(new VideoPlayerWindow(100, 100, node->name));
         }
         // Dodaj obsługę wielkich/małych liter lub innych rozszerzeń
         else if (strcmp(ext, ".txt") == 0 || strcmp(ext, ".c") == 0 || strcmp(ext, ".cpp") == 0 || strcmp(ext, ".h") == 0) {
             // WAŻNE: Tutaj przekazujemy wskaźnik 'node'
-            desktop->AddWindow(new NotepadWindow(150, 150, node));
+            main_desktop->AddWindow(new NotepadWindow(150, 150, node));
         }
         else {
             // Nieznany plik? Otwórz w notatniku jako fallback (może to plik tekstowy bez rozszerzenia)
-            desktop->AddWindow(new NotepadWindow(150, 150, node));
+            main_desktop->AddWindow(new NotepadWindow(150, 150, node));
         }
     } else {
         // Brak rozszerzenia - też otwórz w notatniku
-        desktop->AddWindow(new NotepadWindow(150, 150, node));
+        main_desktop->AddWindow(new NotepadWindow(150, 150, node));
     }
 }

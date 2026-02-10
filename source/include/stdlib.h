@@ -17,8 +17,15 @@ unsigned long strtoul(const char* nptr, char** endptr, int base);
 int abs(int j);
 void* sbrk(intptr_t increment);
 
+int atoi(const char *nptr);
+char *getenv(const char *name);
+
+extern char **environ;
+
 #ifdef __cplusplus
 }
 #endif
+
+
 
 #endif
