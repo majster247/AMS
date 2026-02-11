@@ -4,18 +4,31 @@
 #include "ctype.h" // upewnij się, że masz ctype.h z isspace, isdigit, isalpha
 
 static uint64_t heap_current = 0x70000000;
-
 extern "C" {
 
     char *__env_internal[] = { 0 }; 
     char **environ = __env_internal;
 
+void* sbrk(intptr_t increment) {
+    // 1. Pobierz obecny koniec sterty (brk(0))
+    uint64_t current_brk = ams_syscall(12, 0, 0, 0);
+    
+    if (increment == 0) return (void*)current_brk;
+
+    // 2. Poproś o nowy koniec
+    uint64_t new_brk = ams_syscall(12, current_brk + increment, 0, 0);
+    
+    if (new_brk == current_brk) return (void*)-1; // Błąd alokacji
+    
+    return (void*)current_brk;
+}
+
 void* malloc(size_t size) {
-    void* addr = (void*)heap_current;
-    heap_current += size;
-    // Tutaj w wersji PRO powinieneś wołać syscall "sbrk" lub "mmap"
-    // Ale na start, skoro zmapowałeś 4GB jako Identity, to zadziała "na chama"
-    return addr;
+    if (size == 0) return NULL;
+    size = (size + 15) & ~15; // Wyrównanie
+    void* ptr = sbrk(size);
+    if (ptr == (void*)-1) return NULL;
+    return ptr;
 }
 
 void free(void* ptr) {

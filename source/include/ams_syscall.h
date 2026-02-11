@@ -8,8 +8,7 @@
 extern "C" {
 #endif
 
-// Tu była zmiana: int -> intptr_t
-void* sbrk(intptr_t increment);
+inline uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3);
 
 void print_char(char c);
 void print_string(const char* str);

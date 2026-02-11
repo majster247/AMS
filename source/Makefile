@@ -46,6 +46,7 @@ KERNEL_OBJS += $(patsubst src/%.s, build/%.o, $(SRCS_KERNEL_ASM))
 
 # 7. Lista obiektów dla BIBLIOTEKI C (LibC)
 LIBC_OBJS := build/lib/crt0.o \
+			 build/lib/syscall.o \
              build/lib/ams_syscall.o \
              build/lib/stdlib.o \
              build/lib/string.o \

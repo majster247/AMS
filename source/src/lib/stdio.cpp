@@ -7,6 +7,7 @@
 extern "C" void* malloc(size_t size);
 extern "C" void free(void* ptr);
 extern "C" size_t strlen(const char* s);
+extern "C" uint64_t ams_syscall(uint64_t nr, uint64_t p1, uint64_t p2, uint64_t p3);
 
 extern "C" {
 
@@ -19,14 +20,15 @@ FILE *stdout = &__stdout;
 FILE *stderr = &__stderr;
 
 
-FILE* fopen(const char* path, const char* mode) {
-    int fd = open(path, 0); // Tu trzeba będzie kiedyś obsłużyć flagi mode
-    if (fd < 0) return (FILE*)0; // Jawne zero lub rzutowanie
+FILE* fopen(const char* filename, const char* mode) {
+    // Syscall 2 = SYS_OPEN
+    int fd = (int)ams_syscall(2, (uint64_t)filename, 0, 0);
+    
+    if (fd < 0) return NULL; // Błąd otwarcia
 
     FILE* f = (FILE*)malloc(sizeof(FILE));
-    if (!f) return (FILE*)0;
-    
     f->fd = fd;
+    // f->buffer... (jeśli chcesz buforowanie, na razie olej)
     return f;
 }
 
@@ -36,13 +38,6 @@ FILE* fdopen(int fd, const char* mode) {
     if (!f) return (FILE*)0;
     f->fd = fd;
     return f;
-}
-
-int fclose(FILE* stream) {
-    if (!stream) return -1;
-    close(stream->fd);
-    free(stream);
-    return 0;
 }
 
 int fgetc(FILE* stream) {
@@ -207,7 +202,19 @@ int printf(const char* format, ...) {
     va_end(args);
     return 0;
 }
+size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) {
+    // Syscall 0 = SYS_READ
+    uint64_t bytes_requested = size * nmemb;
+    uint64_t bytes_read = ams_syscall(0, stream->fd, (uint64_t)ptr, bytes_requested);
+    return bytes_read / size;
+}
 
+int fclose(FILE* stream) {
+    // Syscall 3 = SYS_CLOSE
+    ams_syscall(3, stream->fd, 0, 0);
+    free(stream);
+    return 0;
+}
 
 
 // TCC używa też fwrite

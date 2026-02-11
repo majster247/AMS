@@ -43,14 +43,6 @@ int read(int fd, void* buf, int count) {
     return (int)syscall(0, fd, (uint64_t)buf, count); // Syscall 0 = SYS_READ
 }
 
-// To będzie potrzebne dla malloc!
-// sbrk przesuwa koniec sterty procesu
-void* sbrk(intptr_t increment) {
-    // Syscall 12 to u nas brk/sbrk (musimy go dodać w kernelu!)
-    // Na razie załóżmy, że go dodamy za chwilę.
-    return (void*)syscall(12, increment, 0, 0);
-}
-
 
 long lseek(int fd, long offset, int whence) {
     // Syscall 8 to lseek. Przekazujemy tylko 3 parametry: fd, offset, whence.
