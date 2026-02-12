@@ -75,7 +75,7 @@ extern "C" int sys_exec(const char* path, int argc, char** argv) {
     Elf64_Phdr* phdrs = (Elf64_Phdr*)ph_buf;
 
     // ZMIENNA DO ŚLEDZENIA KOŃCA PROGRAMU (Naprawa kolizji ze stertą)
-    uint64_t max_vaddr = 0x40000000;
+    uint64_t max_vaddr = 0;
 
     // 4. Mapuj segmenty do pamięci
     for (int i = 0; i < header.e_phnum; i++) {
@@ -109,6 +109,7 @@ extern "C" int sys_exec(const char* path, int argc, char** argv) {
             }
         }
     }
+    
 
     // 5. Przygotuj Stos Użytkownika (1MB)
     uint64_t stack_top = 0x7FFFFFFF0000;
@@ -225,11 +226,24 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
 
     keyboard_init();
     mouse_init();
+    
     gdt_init();     
     syscall_init();
     enable_sse();
     scheduler_init_kernel_task();
     idt_init();
+
+    // DIAGNOSTYKA GDT/TSS (Poprawiona)
+    struct { uint16_t limit; uint64_t base; } __attribute__((packed)) current_gdtr;
+    uint16_t current_tss;
+    asm volatile("sgdt %0" : "=m"(current_gdtr));
+    asm volatile("str %0" : "=r"(current_tss));
+
+    write_serial_string("[KERN] GDT Actual Base: "); write_serial_hex(current_gdtr.base);
+    write_serial_string(" Limit: "); write_serial_hex(current_gdtr.limit);
+    write_serial_string("\n[KERN] TSS Active Selector: "); write_serial_hex(current_tss);
+    write_serial_string("\n");
+
     vfs_init();
     pci_init(); 
     
