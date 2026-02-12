@@ -1,15 +1,7 @@
 #include "idt.h"
 #include "kernel.h"
 #include "io.h"
-
-// Musi pasować do tego, co asembler wrzuca na stos!
-struct registers {
-    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
-    uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
-    //uint64_t ds;
-    uint64_t int_no, err_code;
-    uint64_t rip, cs, rflags, rsp, ss;
-} __attribute__((packed));
+#include "task.h"
 
 extern "C" {
     // ISRs
@@ -72,7 +64,11 @@ extern "C" void idt_init() {
     idtr.base = (uint64_t)&idt;
 
     // 1. Wyjątki (0-31)
-    for (int i = 0; i < 32; i++) idt_set_gate(i, isr_stub_table[i], 0x08, 0x8E);
+    for (int i = 0; i < 32; i++) {
+        idt_set_gate(i, isr_stub_table[i], 0x08, 0x8E);
+        // IST[1] dla Double Fault (Int 8)
+        if (i == 8) idt[i].ist = 1; 
+    }
 
     idt_remap_pic();
 

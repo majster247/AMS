@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-inline uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3);
+uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3, uint64_t p4, uint64_t p5);
 
 void print_char(char c);
 void print_string(const char* str);

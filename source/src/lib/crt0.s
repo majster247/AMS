@@ -1,21 +1,30 @@
-; src/lib/crt0.s
-[BITS 64]
-
 global _start
 extern main
 extern exit
 
 section .text
-
 _start:
-    ; Tutaj moglibyśmy zdjąć argumenty (argc, argv) ze stosu,
-    ; ale na razie zróbmy prosto:
+    ; Kernel wrzucił na stos:
+    ; [RSP]    = argc (ilość argumentów)
+    ; [RSP+8]  = argv[0] (wskaźnik do nazwy programu)
+    ; [RSP+16] = argv[1] ...
     
-    xor rbp, rbp    ; Wyzeruj RBP (oznacza koniec stack trace)
-    call main       ; Wywołaj funkcję main() z programu użytkownika
+    ; ABI Linuxa / System V oczekuje:
+    ; RDI = argc
+    ; RSI = argv (wskaźnik na tablicę wskaźników)
     
-    ; Jeśli main wróci (return), wynik jest w RAX
-    mov rdi, rax    ; Przekaż wynik jako kod wyjścia
-    call exit       ; Zawołaj exit() z naszej biblioteki
+    mov rdi, [rsp]      ; Weź argc ze szczytu stosu
+    lea rsi, [rsp+8]    ; argv to adres zaraz za argc (czyli RSP + 8)
     
-    hlt             ; Tu nigdy nie dojdziemy
+    ; Wyrównanie stosu (opcjonalne, ale dobre dla SSE)
+    ; and rsp, -16
+    
+    call main           ; main(argc, argv)
+    
+    ; Jeśli main wróci, wywołaj exit z kodem powrotu (w RAX)
+    mov rdi, rax
+    call exit
+    
+    ; Bezpiecznik (gdyby exit nie zadziałał)
+    mov rax, 60
+    syscall

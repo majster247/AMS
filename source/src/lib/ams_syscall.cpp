@@ -1,67 +1,57 @@
-// src/lib/ams_syscall.cpp
 #include "ams_syscall.h"
 #include "stdlib.h"  // Dla malloc i free
 #include "string.h"  // Dla memset
+#include <stdint.h>  // Dla uint64_t
 
-// Funkcja pomocnicza do ASM
-inline uint64_t syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3) {
-    uint64_t ret;
-    asm volatile (
-        "int $0x80" 
-        : "=a"(ret)
-        : "a"(sys_num), "D"(p1), "S"(p2), "d"(p3)
-        : "memory"
-    );
-    return ret;
-}
-
+// WAŻNE: To łączy nas z plikiem src/lib/syscall.s
+// To ta funkcja wykonuje instrukcję CPU 'syscall'
+extern "C" uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3, uint64_t p4, uint64_t p5);
 extern "C" {
 
 void exit(int code) {
-    syscall(60, code, 0, 0);
+    // Dodajemy dwa zera na końcu (p4, p5)
+    ams_syscall(60, code, 0, 0, 0, 0); 
     while(1);
 }
 
 int sys_exec(const char* path, int argc, char** argv) {
-    // Zakładam, że EXEC ma numer np. 10 (sprawdź w syscall.cpp w jądrze)
-    return syscall(10, (uint64_t)path, (uint64_t)argc, (uint64_t)argv);
+    // Dodajemy dwa zera na końcu
+    return (int)ams_syscall(10, (uint64_t)path, (uint64_t)argc, (uint64_t)argv, 0, 0);
 }
 
 int write(int fd, const char* buf, int count) {
-    return (int)syscall(1, fd, (uint64_t)buf, count);
+    // Dodajemy dwa zera na końcu
+    return (int)ams_syscall(1, fd, (uint64_t)buf, count, 0, 0);
 }
 
 int open(const char* path, int flags) {
-    return (int)syscall(2, (uint64_t)path, flags, 0);
+    // Dodajemy dwa zera na końcu
+    return (int)ams_syscall(2, (uint64_t)path, flags, 0, 0, 0);
 }
 
 int close(int fd) {
-    return (int)syscall(3, fd, 0, 0);
+    // Dodajemy dwa zera na końcu
+    return (int)ams_syscall(3, fd, 0, 0, 0, 0);
 }
 
 int read(int fd, void* buf, int count) {
-    return (int)syscall(0, fd, (uint64_t)buf, count); // Syscall 0 = SYS_READ
+    // Dodajemy dwa zera na końcu
+    return (int)ams_syscall(0, fd, (uint64_t)buf, count, 0, 0); 
 }
-
 
 long lseek(int fd, long offset, int whence) {
-    // Syscall 8 to lseek. Przekazujemy tylko 3 parametry: fd, offset, whence.
-    return (long)syscall(8, fd, (uint64_t)offset, whence); 
+    // Dodajemy dwa zera na końcu
+    return (long)ams_syscall(8, fd, (uint64_t)offset, whence, 0, 0); 
 }
-
 int unlink(const char* pathname) {
-    (void)pathname; // Wyłącz ostrzeżenie o nieużytym parametrze
+    (void)pathname; 
     return 0; 
 }
 
+// Mmap na razie symulujemy malloc'iem (dla user space to bez różnicy na tym etapie)
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) {
-    (void)addr; (void)prot; (void)flags; (void)fd; (void)offset;
-    
-    void* ptr = malloc(length);
-    if (!ptr) return (void*)-1;
-    
-    memset(ptr, 0, length);
-    return ptr;
+    // 9 = SYS_MMAP (zgodnie z Linuxem)
+    return (void*)ams_syscall(9, (uint64_t)addr, length, prot, flags, (uint64_t)fd);
 }
 
 int munmap(void* addr, size_t length) {
@@ -70,6 +60,7 @@ int munmap(void* addr, size_t length) {
     return 0;
 }
 
+// Zmienne globalne dla errno (wymagane przez niektóre biblioteki C)
 int errno_val = 0;
 int* __errno_location() { return &errno_val; }
 

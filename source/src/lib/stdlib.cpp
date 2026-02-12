@@ -11,12 +11,12 @@ extern "C" {
 
 void* sbrk(intptr_t increment) {
     // 1. Pobierz obecny koniec sterty (brk(0))
-    uint64_t current_brk = ams_syscall(12, 0, 0, 0);
+    uint64_t current_brk = ams_syscall(12, 0, 0, 0, 0, 0); // Syscall 12 = SYS_BRK
     
     if (increment == 0) return (void*)current_brk;
 
     // 2. Poproś o nowy koniec
-    uint64_t new_brk = ams_syscall(12, current_brk + increment, 0, 0);
+    uint64_t new_brk = ams_syscall(12, current_brk + increment, 0, 0, 0, 0);
     
     if (new_brk == current_brk) return (void*)-1; // Błąd alokacji
     

@@ -5,8 +5,8 @@
 #include "gdt.h"
 
 // Definicje selektorów segmentów (zgodne z GDT)
-#define USER_CS 0x23  // 0x20 | 3
-#define USER_SS 0x1B  // 0x18 | 3
+#define USER_CS 0x33  // Zmiana z 0x23
+#define USER_SS 0x2B  // Zmiana z 0x1B
 #define KERNEL_CS 0x08
 #define KERNEL_SS 0x10
 #define RFLAGS_IF 0x202
@@ -88,12 +88,21 @@ extern "C" uint64_t schedule(registers* regs) {
     // DLA USERA TRZEBA USTAWIAĆ TSS!
 
     system_tss.rsp0 = current_task->kernel_stack;
+    cpu_data.kernel_stack = current_task->kernel_stack;
     
-    if (current_task->id != 0) { // Tylko dla usera
-        //write_serial_string("TSS UPDATE: ");
-        //write_serial_hex(system_tss.rsp0);
-        //write_serial_string("\n");
-    }
+
+    //Bardzo ochydny sposób na debugowanie, ale przynajmniej widać, że scheduler działa i przełącza zadania.
+    /*
+    write_serial_string("[SCHEDULER] Przelaczam na zadanie ID: ");
+    write_serial_dec(current_task->id);
+    write_serial_string(" RIP: ");
+    registers* r = (registers*)current_task->kstack_top;
+    write_serial_hex(r->rip);
+    write_serial_string("\n");
+    write_serial_string("[SCHEDULER] Kernel Stack: ");
+    write_serial_hex(current_task->kernel_stack);
+    write_serial_string("\n");
+    */
 
     return current_task->kstack_top;
 }

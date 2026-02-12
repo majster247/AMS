@@ -42,6 +42,12 @@ struct gdt_tss_entry {
     uint32_t reserved;
 } __attribute__((packed));
 
+struct CpuData {
+    uint64_t self;               // Offset 0x00
+    uint64_t kernel_stack;       // Offset 0x08
+    uint64_t user_stack_scratch; // Offset 0x10
+};
+
 extern "C" {
     /** @brief Inicjalizuje tablicę GDT, wczytuje selektory i ładuje TSS */
     void gdt_init();
@@ -49,4 +55,5 @@ extern "C" {
     void syscall_init();
 
     extern tss_entry system_tss;
+    extern CpuData cpu_data;
 }

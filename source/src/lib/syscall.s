@@ -1,17 +1,14 @@
-[BITS 64]
-
+[bits 64]
 global ams_syscall
 
-; Funkcja: uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3);
-; Argumenty wchodzą w (System V ABI): RDI, RSI, RDX, RCX
-; Kernel oczekuje (Linux ABI): RAX (num), RDI, RSI, RDX
-
+section .text
+; ams_syscall(rdi:num, rsi:p1, rdx:p2, rcx:p3, r8:p4, r9:p5)
 ams_syscall:
-    mov rax, rdi      ; 1. Numer syscalla idzie do RAX
-    mov rdi, rsi      ; 2. Parametr 1 idzie do RDI
-    mov rsi, rdx      ; 3. Parametr 2 idzie do RSI
-    mov rdx, rcx      ; 4. Parametr 3 idzie do RDX
-    
-    syscall           ; BUM! Skok do kernela (Ring 0)
-    
-    ret               ; Wynik jest już w RAX
+    mov rax, rdi    ; ID do RAX
+    mov rdi, rsi    ; p1
+    mov rsi, rdx    ; p2
+    mov rdx, rcx    ; p3
+    mov r10, r8     ; p4 (TU JEST FIX: Linux używa R10, bo syscall niszczy RCX)
+    mov r8, r9      ; p5
+    syscall         ; Skok do jądra
+    ret

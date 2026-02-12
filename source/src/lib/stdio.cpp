@@ -7,7 +7,6 @@
 extern "C" void* malloc(size_t size);
 extern "C" void free(void* ptr);
 extern "C" size_t strlen(const char* s);
-extern "C" uint64_t ams_syscall(uint64_t nr, uint64_t p1, uint64_t p2, uint64_t p3);
 
 extern "C" {
 
@@ -22,7 +21,7 @@ FILE *stderr = &__stderr;
 
 FILE* fopen(const char* filename, const char* mode) {
     // Syscall 2 = SYS_OPEN
-    int fd = (int)ams_syscall(2, (uint64_t)filename, 0, 0);
+    int fd = (int)ams_syscall(2, (uint64_t)filename, 0, 0, 0, 0);
     
     if (fd < 0) return NULL; // Błąd otwarcia
 
@@ -205,13 +204,13 @@ int printf(const char* format, ...) {
 size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) {
     // Syscall 0 = SYS_READ
     uint64_t bytes_requested = size * nmemb;
-    uint64_t bytes_read = ams_syscall(0, stream->fd, (uint64_t)ptr, bytes_requested);
+    uint64_t bytes_read = ams_syscall(0, stream->fd, (uint64_t)ptr, bytes_requested, 0, 0);
     return bytes_read / size;
 }
 
 int fclose(FILE* stream) {
     // Syscall 3 = SYS_CLOSE
-    ams_syscall(3, stream->fd, 0, 0);
+    ams_syscall(3, stream->fd, 0, 0, 0, 0);
     free(stream);
     return 0;
 }
