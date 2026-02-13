@@ -18,6 +18,17 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#ifndef MAP_ANONYMOUS
+#define MAP_SHARED    0x01
+#define MAP_PRIVATE   0x02
+#define MAP_ANONYMOUS 0x20
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
+#define PROT_EXEC     0x4
+#define MAP_FAILED    ((void *)-1)
+#endif
+
+
 #ifndef ONE_SOURCE
 # define ONE_SOURCE 1
 #endif

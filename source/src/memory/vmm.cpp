@@ -73,6 +73,12 @@ extern "C" {
 
         pt[pt_idx] = phys | flags | PAGE_PRESENT;
         invlpg(virt);
+
+        if (flags & PAGE_USER) {
+            // Musisz mieć dostęp do tego adresu w jądrze, żeby go wyzerować.
+            // Jeśli masz identity mapping, to proste:
+            memset((void*)(phys + PHYSICAL_MEM_OFFSET), 0, 4096); 
+        }
     }
 
     // --- MAPOWANIE HUGE (2MB) ---
@@ -107,7 +113,8 @@ extern "C" {
 
         for (uint64_t phys = 0; phys < limit; phys += step) {
             // Musi być PAGE_USER, żeby Ring 3 widział kod ELFa i stos!
-            vmm_map_huge(phys, phys, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+            // Mapuj tylko dla Kernela (bez PAGE_USER), chyba że wiesz co robisz
+            vmm_map_huge(phys, phys, PAGE_PRESENT | PAGE_WRITABLE);
             // Kernel map (high half) nie potrzebuje USER
             vmm_map_huge(phys + PHYSICAL_MEM_OFFSET, phys, PAGE_PRESENT | PAGE_WRITABLE);
         }

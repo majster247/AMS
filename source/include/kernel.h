@@ -73,6 +73,12 @@ extern "C" {
     /** @brief Przełącza kontekst i dodaje zadanie w trybie użytkownika */
     void scheduler_add_user_task(void* entry, void* stack);
 
+
+    void* pmm_alloc_blocks(size_t block_count);
+    void pmm_mark_used(uint64_t start, uint64_t size);
+    void pmm_mark_free(uint64_t start, uint64_t size);
+    void pmm_mark_chunk_used(uint64_t start_addr, size_t size_bytes);
+
     /** @brief Wymusza zmianę stosu i wywołuje funkcję */
     //extern "C" void force_stack_switch(uint64_t new_rsp, void (*func)());
 }

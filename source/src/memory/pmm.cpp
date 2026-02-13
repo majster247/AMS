@@ -80,3 +80,38 @@ extern "C" void pmm_free_frame(void* ptr) {
 extern "C" void pmm_mark_chunk_used(uint64_t start_addr, size_t size_bytes) {
     pmm_mark_used(start_addr, size_bytes);
 }
+
+extern "C" void* pmm_alloc_blocks(size_t block_count) {
+    size_t size_bytes = block_count * PAGE_SIZE;
+    for (uint64_t i = 0; i < bitmap_size; i++) {
+        if (bitmap[i] != 0xFF) { 
+            for (int j = 0; j < 8; j++) {
+                if (!(bitmap[i] & (1 << j))) {
+                    uint64_t frame = i * 8 + j;
+                    uint64_t addr = frame * PAGE_SIZE;
+
+                    // Sprawdź, czy kolejne bloki są wolne
+                    bool all_free = true;
+                    for (size_t k = 0; k < block_count; k++) {
+                        uint64_t next_frame = frame + k;
+                        if (next_frame >= total_frames || (bitmap[next_frame / 8] & (1 << (next_frame % 8)))) {
+                            all_free = false;
+                            break;
+                        }
+                    }
+
+                    if (all_free) {
+                        // Oznacz wszystkie bloki jako zajęte
+                        for (size_t k = 0; k < block_count; k++) {
+                            uint64_t next_frame = frame + k;
+                            bitmap[next_frame / 8] |= (1 << (next_frame % 8));
+                            used_frames++;
+                        }
+                        return (void*)addr;
+                    }
+                }
+            }
+        }
+    }
+    return nullptr; 
+}

@@ -119,7 +119,8 @@ task* create_task(void (*entry_point)()) {
     t->cr3 = get_cr3(); // Wątki jądra dzielą przestrzeń adresową
 
     // Alokacja stosu
-    uint64_t stack_size = 4096;
+    uint64_t stack_size = 1024*1024; // 1MB
+    void* kstack_phys = pmm_alloc_blocks(256); // 256 stron = 1MB
     uint8_t* stack_mem = (uint8_t*)kmalloc(stack_size);
     uint64_t stack_top = (uint64_t)stack_mem + stack_size;
     
@@ -159,8 +160,9 @@ void scheduler_add_user_task(void* entry_point, void* user_stack) {
     t->cr3 = get_cr3(); 
 
     // 1. Alokacja stosu jądra
-    uint64_t kstack_size = 8192; // Zwiększmy do 8KB dla bezpieczeństwa
-    uint8_t* kstack_mem = (uint8_t*)kmalloc(kstack_size);
+    uint64_t kstack_size = 1024*1024; // 1MB stosu jądra dla każdego procesu z uwagi na tcc
+    void* kstack_phys = pmm_alloc_blocks(256); // Alokujesz 1MB fizycznie...
+    uint8_t* kstack_mem = (uint8_t*)kmalloc(kstack_size); // ...i 1MB wirtualnie na stercie
     uint64_t kstack_top = (uint64_t)kstack_mem + kstack_size;
     t->kernel_stack = kstack_top;
 
@@ -180,8 +182,19 @@ void scheduler_add_user_task(void* entry_point, void* user_stack) {
     // jeśli Twój kod ASM je przywraca (pop rax, pop rbx itd.)
     r->rax = 0;
     r->rbx = 0;
-    // ... reszta na 0
-
+    r->rcx = 0; // Jeśli używasz rcx do przekazywania argumentów
+    r->rdx = 0;
+    r->rsi = 0;
+    r->rdi = 0;
+    r->rbp = 0;
+    r->r8 = 0;
+    r->r9 = 0;
+    r->r10 = 0;
+    r->r11 = 0;
+    r->r12 = 0;
+    r->r13 = 0;
+    r->r14 = 0;
+    r->r15 = 0;
     t->kstack_top = (uint64_t)r;
 
     // 3. Dodawanie do listy

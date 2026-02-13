@@ -93,6 +93,9 @@ long strtol(const char* nptr, char** endptr, int base) {
     return (neg ? -acc : acc);
 }
 
+// --- SEKCJA FLOAT (Tylko dla User Mode z włączonym SSE) ---
+#ifdef __SSE__
+
 // Atrapy dla floatów (TCC ich wymaga do linkowania, ale możemy zwrócić 0)
 double strtod(const char* nptr, char** endptr) { 
     if(endptr) *endptr = (char*)nptr; 
@@ -102,6 +105,9 @@ float strtof(const char* nptr, char** endptr) { return 0.0f; }
 unsigned long strtoul(const char *nptr, char **endptr, int base) {
     return (unsigned long)strtol(nptr, endptr, base);
 }
+
+#endif
+// --------------------------------------------
 
 extern "C" void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
     // Bardzo słaby, ale działający bubble sort dla TCC

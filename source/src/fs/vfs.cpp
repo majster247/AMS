@@ -60,25 +60,36 @@ void vfs_init() {
 }
 
 vfs_node* vfs_find(const char* name) {
-    vfs_node* curr = vfs_root;
-    
-    // Debug: Pokaż, że szukamy
-    // write_serial_string("[VFS] Szukam pliku: ");
-    // write_serial_string(name);
-    // write_serial_string("\n");
+    if (!name || name[0] == '\0') return nullptr;
 
+    // 1. Znajdź "basename" (wszystko po ostatnim ukośniku)
+    const char* filename = name;
+    for (int i = 0; name[i] != '\0'; i++) {
+        if (name[i] == '/') {
+            filename = &name[i + 1];
+        }
+    }
+
+    // Jeśli po ostatnim '/' nic nie ma (np. ścieżka to "/"), zwróć błąd
+    if (filename[0] == '\0') return nullptr;
+
+    write_serial_string("[VFS] Szukam surowej nazwy: ");
+    write_serial_string(filename);
+    write_serial_string("\n");
+
+    vfs_node* curr = vfs_root;
     while (curr) {
-        // Bezpieczne sprawdzenie wskaźnika nazwy
-        if (curr->name[0] != '\0') {
-            if (strcmp(curr->name, name) == 0) {
-                // write_serial_string("[VFS] Znaleziono!\n");
-                return curr;
-            }
+        write_serial_string("  Sprawdzam: ");
+        write_serial_string(curr->name);
+        write_serial_string("\n");
+        if (strcmp(curr->name, filename) == 0) {
+            write_serial_string("[VFS] Znaleziono plik: ");
+            write_serial_string(curr->name);
+            write_serial_string("\n");
+            return curr;
         }
         curr = curr->next;
     }
-    
-    // write_serial_string("[VFS] Nie znaleziono.\n");
     return nullptr;
 }
 

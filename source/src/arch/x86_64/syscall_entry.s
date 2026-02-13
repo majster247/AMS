@@ -15,8 +15,8 @@ syscall_entry:
     push 0x33               ; CS
     push rcx                ; RIP (Adres powrotu)
     
-    push 0                  ; int_no
     push 0                  ; err_code
+    push 123                  ; int_no
 
     ; Pchamy rejestry... (pamiętaj o kolejności z task.h!)
     push r15
@@ -40,33 +40,30 @@ syscall_entry:
     push rax
 
     mov rdi, rsp
-    sub rsp, 8              ; Alignment
     call syscall_handler
-    add rsp, 8
 
     ; 4. Powrót
-    pop rax                 ; Tu jest wynik BRK (0x4000...)
+    pop rax
     pop rbx
-    pop rcx                 ; Zdejmij argument (R10)
+    pop r10         ; rcx_arg (R10 przekazane jako RCX)
     pop rdx
     pop rsi
     pop rdi
     pop rbp
     pop r8
     pop r9
-    pop r10
+    pop r10         ; oryginalne r10
     pop r11
     pop r12
     pop r13
     pop r14
     pop r15
 
-    add rsp, 16             ; Zdejmij err/int
-
-    pop rcx                 ; Odtwórz RIP (zapisany wcześniej adres powrotu)
-    add rsp, 8              ; Pomiń CS
-    pop r11                 ; RFLAGS
-    pop rsp                 ; User RSP
+    add rsp, 16     ; Przeskocz int_no i err_code
     
-    swapgs
-    sysretq
+    ; TERAZ RSP wskazuje na RIP (ramka CPU)
+    ; Używamy IRETQ zamiast SYSRETQ dla testu - on zdejmie 5 wartości:
+    ; RIP, CS, RFLAGS, RSP, SS
+    
+    swapgs          ; Przywróć GS użytkownika
+    iretq           ; Pancerny powrót

@@ -16,6 +16,15 @@ extern "C" void syscall_entry();
 extern "C" void write_serial_char(char c);
 static vfs_node* open_files[100];
 
+static uint64_t mmap_region_start = 0x400000000; // 16GB (bezpiecznie daleko)
+
+void safe_kernel_memset(void* ptr, int value, size_t num) {
+    unsigned char* p = (unsigned char*)ptr;
+    while(num--) {
+        *p++ = (unsigned char)value;
+    }
+}
+
 extern "C" void syscall_init() {
     uint32_t lo, hi;
     
@@ -44,6 +53,9 @@ extern "C" void syscall_init() {
 
 extern "C" void syscall_handler(registers* regs) {
     uint64_t syscall_id = regs->rax;
+    //write_serial_string("Returning to RIP: ");
+    //write_serial_hex(regs->rip);
+    //write_serial_string("\n");
     
     if (regs->rip == 0) {
         write_serial_string("!!! ALARM: RIP na stosie to 0 (Stack Smash?) !!!\n");
@@ -67,26 +79,22 @@ extern "C" void syscall_handler(registers* regs) {
             f->current_pos += regs->rax;
             break;
         }
-        case 1: { // WRITE
-            int fd = (int)regs->rdi;
+        
+        case 1: { // SYS_WRITE
+            // Jeśli TCC chce coś napisać (błąd), to wypisujemy to bez prefixów!
             char* buf = (char*)regs->rsi;
-            uint64_t len = regs->rdx;
-            if (fd == 1 || fd == 2) {
-                for(uint64_t i=0; i<len; i++) write_serial_char(buf[i]);
-                regs->rax = len;
-            } else if (fd >= 3 && open_files[fd]) {
-                vfs_node* f = open_files[fd];
-                uint64_t w = vfs_write(f, f->current_pos, len, (uint8_t*)buf);
-                f->current_pos += w;
-                regs->rax = w;
-            } else regs->rax = -1;
+            for (size_t i = 0; i < regs->rdx; i++) {
+                write_serial_char(buf[i]);
+            }
+            regs->rax = regs->rdx;
             break;
         }
         case 2: { // OPEN
             char* path = (char*)regs->rdi;
+            write_serial_string("!!! OPEN SYSCALL: "); write_serial_string(path); write_serial_string("\n");
             write_serial_string(" [OPEN] "); write_serial_string(path); write_serial_string("\n");
             vfs_node* node = vfs_find(path);
-            if (!node) { regs->rax = -1; return; }
+            if (!node) { regs->rax = -1; write_serial_string("[OPEN] File not found.\n"); return; }
             for(int i=3; i<100; i++) {
                 if (!open_files[i]) {
                     open_files[i] = node; node->current_pos = 0; regs->rax = i; return;
@@ -95,13 +103,16 @@ extern "C" void syscall_handler(registers* regs) {
             regs->rax = -1;
             break;
         }
+        
         case 3: { // CLOSE
             int fd = (int)regs->rdi;
             if (fd >= 3 && fd < 100) open_files[fd] = nullptr;
             regs->rax = 0;
             break;
         }
+        
         case 5: regs->rax = 0; break; // FSTAT
+        
         case 8: { // LSEEK
              int fd = (int)regs->rdi;
              if(fd>=3 && open_files[fd]) {
@@ -113,28 +124,114 @@ extern "C" void syscall_handler(registers* regs) {
              } else regs->rax = -1;
              break;
         }
-        case 12: { // BRK (Poprawione wyrównanie)
+        // -----------------------------------------------------------
+        // Syscall 9: MMAP (TCC tego pragnie dla kodu)
+        // -----------------------------------------------------------
+        case 9: { // MMAP
+                // Ignoruj flagi, daj mu po prostu anonimową pamięć RWX
+                uint64_t len = regs->rsi;
+                if (len == 0) { regs->rax = -22; break; } // EINVAL
+                    
+                // Wyrównaj do strony
+                if (len % 4096) len = (len & ~0xFFF) + 4096;
+                    
+                // Znajdź miejsce (użyj globalnego licznika dla mmap)
+                // UWAGA: Nie używaj heap_start (0x80000000), bo tam jest BRK!
+                // Użyj np. 0x400000000 (16GB) jako bazy dla MMAP
+                static uint64_t mmap_base = 0x400000000; 
+                    
+                uint64_t ret = mmap_base;
+                for (uint64_t i = 0; i < len; i+=4096) {
+                    void* p = pmm_alloc_frame();
+                    vmm_map_page(mmap_base + i, (uint64_t)p, 0x7); // User RWX
+                    memset((void*)(mmap_base+i), 0, 4096);
+                }
+                
+                mmap_base += len;
+                regs->rax = ret;
+                break;
+            }
+
+        // -----------------------------------------------------------
+        // Syscall 10: MPROTECT (TCC tego potrzebuje, żeby uwierzyć, że kod zadziała)
+        // -----------------------------------------------------------
+        case 10: { 
+            // addr = rdi, len = rsi, prot = rdx
+            // W naszym prostym OS ignorujemy uprawnienia (wszystko jest RWX)
+            // Ale musimy zwrócić 0 (SUKCES), żeby TCC był szczęśliwy.
+            
+            // Debug info (żebyś widział, czy TCC o to pyta)
+            write_serial_string("[MPROTECT] Fake success for: "); 
+            write_serial_hex(regs->rdi); 
+            write_serial_string("\n");
+
+            regs->rax = 0; 
+            break;
+        }
+
+        // -----------------------------------------------------------
+        // Syscall 11: MUNMAP (Dla porządku, żeby nie było błędów -1)
+        // -----------------------------------------------------------
+        case 11: {
+            regs->rax = 0; // Udajemy, że zwolniliśmy
+            break;
+        }
+        
+        case 12: { // SYS_BRK
+            //asm volatile("cli");
             uint64_t new_brk = regs->rdi;
             uint64_t curr = current_task->virt_memory_top;
-            if (new_brk == 0) {
+
+            write_serial_string("[BRK] Request: "); 
+            write_serial_hex(new_brk);
+            write_serial_string(" Current: "); 
+            write_serial_hex(curr);
+            write_serial_string("\n");
+
+            // Jeśli to pierwsze wywołanie (new_brk == 0 lub mniejsze niż 1MB)
+            // to inicjalizujemy stertę tam, gdzie proces chce (np. 0x670 + margines)
+            if (curr == 0) {
+                // Startujemy stertę tam, gdzie program TCC się kończy w pamięci
+                // Dla bezpieczeństwa dajmy mu 0x10000000 (256MB), żeby nie kolidował z kodem
+                current_task->virt_memory_top = 0x10000000;
+                curr = 0x10000000;
+            }
+            
+            //logujemy OOM jeśli nie możemy przydzielić więcej pamięci
+            if (new_brk >= 0x100000000) { 
+                write_serial_string("[BRK] OOM: Za duzo!\n");
+                regs->rax = curr;
+                return;
+            }
+        
+            if (new_brk == 0 || new_brk < curr) {
                 regs->rax = curr;
             } else {
+                // Alokacja (tak jak miałeś z zerowaniem!)
                 uint64_t start = (curr + 0xFFF) & ~0xFFF;
-                uint64_t end = (new_brk + 0xFFF) & ~0xFFF;
-                for (uint64_t a = start; a < end; a+=4096) {
-                    vmm_map_page(a, (uint64_t)pmm_alloc_frame(), PAGE_USER | PAGE_WRITABLE | PAGE_PRESENT);
+                uint64_t end   = (new_brk + 0xFFF) & ~0xFFF;
+
+                for (uint64_t virt = start; virt < end; virt += 4096) {
+                    void* phys = pmm_alloc_frame();
+                    safe_kernel_memset(phys, 0, 4096);
+                    vmm_map_page(virt, (uint64_t)phys, PAGE_USER | PAGE_WRITABLE | PAGE_PRESENT);
                 }
                 current_task->virt_memory_top = new_brk;
                 regs->rax = new_brk;
             }
+            //asm volatile("sti");
             break;
         }
+        
         case 60: { // EXIT
-            write_serial_string("[EXIT] Process finished.\n");
+            write_serial_string("[EXIT] Process finished with code: ");
+            write_serial_dec(regs->rdi); // W Linuxie kod wyjścia jest w RDI
+            write_serial_string("\n");
             current_task->state = STATE_ZOMBIE;
             schedule(regs);
             break;
         }
+        
         default: regs->rax = -1; break;
     }
 }

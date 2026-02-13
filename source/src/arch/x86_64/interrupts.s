@@ -167,7 +167,7 @@ irq_common_stub:
     mov rsp, rax       ; Podmiana stosu
 
 common_exit:
-    ; 5. Przywracanie rejestrów
+    ; 1. Przywróć 15 rejestrów
     pop r15
     pop r14
     pop r13
@@ -184,26 +184,26 @@ common_exit:
     pop rbx
     pop rax
     
-    ; 6. Sprawdzenie, czy wracamy do USERLAND (Ring 3) czy KERNEL (Ring 0)
-    ; Na stosie mamy: [RIP, CS, RFLAGS, RSP, SS]
-    ; CS jest pod offsetem 8 (bo usunęliśmy int_no i err_code jeszcze nie teraz, one są na górze)
-    ; Czekaj, stos tutaj to: [int_no, err_code, RIP, CS, ...]
-    ; int_no (8 bajtów) + err_code (8 bajtów) = 16 bajtów.
-    ; CS jest pod [rsp + 16 + 8] = [rsp + 24].
-    
-    test byte [rsp + 24], 3  ; Sprawdź CPL (ostatnie 2 bity CS)
-    jz .return_to_kernel     ; Jeśli 0, to Kernel -> skocz i NIE zeruj DS
-    
-    ; Jeśli wracamy do Usera, zerujemy segmenty dla bezpieczeństwa
+    ; W tym punkcie RSP wskazuje na int_no.
+    ; Układ stosu: [int_no], [err_code], [RIP], [CS], [RFLAGS], [RSP], [SS]
+
+    ; 2. Sprawdź Ring (CS jest 24 bajty od obecnego RSP)
+    test byte [rsp + 24], 3
+    jz .skip_segment_reset
+
+    ; Powrót do Ring 3 - zerujemy DS/ES (używamy AX, bo RAX już przywrócony!)
     push rax
-    mov ax, 0
+    xor ax, ax
     mov ds, ax
     mov es, ax
     pop rax
-    
-.return_to_kernel:
-    add rsp, 16        ; Usuń int_no i err_code ze stosu
-    iretq              ; Powrót
+
+.skip_segment_reset:
+    ; 3. Usuwamy int_no i err_code
+    add rsp, 16
+
+    ; 4. FINALNY POWRÓT
+    iretq
 
 global switch_to_kernel_stack
 

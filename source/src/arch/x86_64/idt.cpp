@@ -94,8 +94,19 @@ extern "C" void isr_handler(registers* r) {
     }
 
     // 2. Jeśli to Timer (zakładamy IRQ0 = 32), ignoruj (lub scheduler to obsłużył w ASM)
-    if (r->int_no == 32) return;
-
+    if (r->int_no == 6 || r->int_no == 13 || r->int_no == 14) {
+    write_serial_string("\n[DEBUG] CODE DUMP at RIP: ");
+    write_serial_hex(r->rip);
+    write_serial_string("\nBytes: ");
+    
+    // Rzutujemy RIP na wskaźnik i czytamy 16 bajtów
+    uint8_t* code = (uint8_t*)r->rip;
+    for (int i = 0; i < 16; i++) {
+        write_serial_hex(code[i]); // Zakładam, że masz taką funkcję, jak nie to zwykły hex
+        write_serial_char(' ');
+    }
+    write_serial_string("\n");
+    }
     // 3. Reszta to błędy CPU - wypisz diagnostykę i zatrzymaj system
     write_serial_string("\n!!! CPU EXCEPTION !!!\n");
     
@@ -111,7 +122,31 @@ extern "C" void isr_handler(registers* r) {
 
     write_serial_string("\n[CPU ERROR DUMP]\n");
     write_serial_string(buf);
+    write_serial_string("RAX: "); write_serial_hex(r->rax); write_serial_string("\n");
+    write_serial_string("RBX: "); write_serial_hex(r->rbx); write_serial_string("\n");
+    write_serial_string("RCX: "); write_serial_hex(r->rcx); write_serial_string("\n");
+    write_serial_string("RDX: "); write_serial_hex(r->rdx); write_serial_string("\n");
+    write_serial_string("RSI: "); write_serial_hex(r->rsi); write_serial_string("\n");
+    write_serial_string("RDI: "); write_serial_hex(r->rdi); write_serial_string("\n");
+    write_serial_string("RBP: "); write_serial_hex(r->rbp); write_serial_string("\n");
+    write_serial_string("R8:  "); write_serial_hex(r->r8);  write_serial_string("\n");
+    write_serial_string("R9:  "); write_serial_hex(r->r9);  write_serial_string("\n");
+    write_serial_string("R10: "); write_serial_hex(r->r10); write_serial_string("\n");
+    write_serial_string("R11: "); write_serial_hex(r->r11); write_serial_string("\n");
+    write_serial_string("R12: "); write_serial_hex(r->r12); write_serial_string("\n");
+    write_serial_string("R13: "); write_serial_hex(r->r13); write_serial_string("\n");
+    write_serial_string("R14: "); write_serial_hex(r->r14); write_serial_string("\n");
+    write_serial_string("R15: "); write_serial_hex(r->r15); write_serial_string("\n");
 
+    uint64_t cr2;
+    asm volatile("mov %%cr2, %0" : "=r"(cr2));
+    
+    write_serial_string("!!! PAGE FAULT !!!\n");
+    write_serial_string("Faulting Address (CR2): ");
+    write_serial_hex(cr2);
+    write_serial_string("\n");
+
+    write_serial_string("Halting system.\n");
     asm volatile("cli; hlt");
 }
 

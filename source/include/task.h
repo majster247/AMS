@@ -10,13 +10,11 @@
 
 // Układ musi pasować do syscall_entry.s (push od dołu do góry)
 struct registers {
-    // PUSHOWANE RĘCZNIE
+    // Rejestry pchnięte przez nas (15 sztuk)
     uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15;
-    
-    // PUSHOWANE JAKO DUMMY (int_no, err_code)
     uint64_t int_no, err_code;
-    
-    // RAMKA PROCESORA (Dla IRETQ / SYSRETQ)
+
+    // Ramka CPU
     uint64_t rip, cs, rflags, rsp, ss;
 } __attribute__((packed));
 
