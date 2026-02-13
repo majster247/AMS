@@ -1,7 +1,7 @@
 #include "gdt.h"
 #include "kernel.h"
 
-static uint64_t gdt_real[9]; 
+uint64_t gdt_real[9]; // Globalna GDT (zgodnie z deklaracją w gdt.h)
 tss_entry system_tss;
 CpuData cpu_data; 
 static uint8_t double_fault_stack[8192]; 

@@ -1,5 +1,6 @@
 #include "vfs.h"
 #include "tar.h"
+#include "ext2.h"
 #include "kernel.h"
 
 // Musisz mieć funkcję kmalloc zadeklarowaną gdzieś
@@ -59,22 +60,42 @@ void vfs_init() {
     write_serial_string("[VFS] System plikow zainicjalizowany.\n");
 }
 
+
+//funkcja pomocnicza k_strstr do sprawdzania prefiksów w nazwach plików
+static char* k_strstr(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return nullptr;
+    size_t needle_len = 0;
+    while (needle[needle_len]) needle_len++;
+
+    for (size_t i = 0; haystack[i]; i++) {
+        size_t j = 0;
+        while (j < needle_len && haystack[i + j] == needle[j]) j++;
+        if (j == needle_len) return (char*)(haystack + i);
+    }
+    return nullptr;
+}
+
+
 vfs_node* vfs_find(const char* name) {
     if (!name || name[0] == '\0') return nullptr;
-
-    // 1. Znajdź "basename" (wszystko po ostatnim ukośniku)
-    const char* filename = name;
-    for (int i = 0; name[i] != '\0'; i++) {
-        if (name[i] == '/') {
-            filename = &name[i + 1];
-        }
+    write_serial_string("[VFS] vfs_find called with: \"");
+    write_serial_string(name);
+    write_serial_string("\"\n");
+    
+    // ✅ Mapuj /usr/lib/tcc/include/* na /tccdefs.h
+    if (k_strstr(name, "/usr/lib/tcc/include/") || 
+        k_strstr(name, "/usr/local/lib/tcc/include/")) {
+        write_serial_string("[VFS] Redirecting to /tccdefs.h\n");
+        name = "/tccdefs.h";
     }
-
+    
+    // Usuń leading slash
+    if (name[0] == '/') name++;
     // Jeśli po ostatnim '/' nic nie ma (np. ścieżka to "/"), zwróć błąd
-    if (filename[0] == '\0') return nullptr;
+    if (name[0] == '\0') return nullptr;
 
     write_serial_string("[VFS] Szukam surowej nazwy: ");
-    write_serial_string(filename);
+    write_serial_string(name);
     write_serial_string("\n");
 
     vfs_node* curr = vfs_root;
@@ -82,7 +103,7 @@ vfs_node* vfs_find(const char* name) {
         write_serial_string("  Sprawdzam: ");
         write_serial_string(curr->name);
         write_serial_string("\n");
-        if (strcmp(curr->name, filename) == 0) {
+        if (strcmp(curr->name, name) == 0) {
             write_serial_string("[VFS] Znaleziono plik: ");
             write_serial_string(curr->name);
             write_serial_string("\n");
@@ -93,10 +114,43 @@ vfs_node* vfs_find(const char* name) {
     return nullptr;
 }
 
-uint64_t vfs_read(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer) {
-    if (node && node->read) {
+size_t vfs_read(vfs_node* node, uint64_t offset, size_t size, uint8_t* buffer) {
+    // Walidacja buffer (musi być user space!)
+    if ((uint64_t)buffer < 0x1000 || (uint64_t)buffer >= 0x800000000000ULL) {
+        write_serial_string("[VFS] ERROR: Buffer not in user space! buf=");
+        write_serial_hex((uint64_t)buffer);
+        write_serial_string("\n");
+        return 0;
+    }
+    
+    if (node->read) {
+        // Odczyt z EXT2
         return node->read(node, offset, size, buffer);
     }
+    
+    if (node->read) {
+        write_serial_string("[VFS] Reading from TAR at offset ");
+        write_serial_dec(offset);
+        write_serial_string(", size ");
+        write_serial_dec(size);
+        write_serial_string("\n");
+        
+        size_t to_copy = size;
+        if (offset >= node->size) return 0;
+        if (offset + size > node->size) {
+            to_copy = node->size - offset;
+        }
+        
+        // ✅ Kopiuj z kernel space (tar_data) do user space (buffer)
+        //memcpy(buffer, node->tar_data + offset, to_copy);
+        
+        write_serial_string("[VFS] Copied ");
+        write_serial_dec(to_copy);
+        write_serial_string(" bytes to user buffer\n");
+        
+        return to_copy;
+    }
+    
     return 0;
 }
 

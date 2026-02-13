@@ -19,13 +19,16 @@ struct registers {
 } __attribute__((packed));
 
 struct task {
+    char name[32];
+    uint64_t rsp;
+    uint64_t rip;
+    uint64_t cr3;
     uint64_t kstack_top;
     uint64_t id;
     int state;
     uint64_t ticks_to_sleep;
     
     uint64_t kernel_stack;
-    uint64_t cr3;
     
     vfs_node* file_descriptors[MAX_OPEN_FILES];
     uint64_t virt_memory_top;

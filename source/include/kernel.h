@@ -7,6 +7,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "task.h"
 
 extern "C" {
     /** === VMM Page Flags === */
@@ -78,6 +79,9 @@ extern "C" {
     void pmm_mark_used(uint64_t start, uint64_t size);
     void pmm_mark_free(uint64_t start, uint64_t size);
     void pmm_mark_chunk_used(uint64_t start_addr, size_t size_bytes);
+    void syscall_handler(registers* regs);
+    void scheduler_switch_to_user(uint64_t entry_point, uint64_t user_stack);
+    task* create_kernel_task();
 
     /** @brief Wymusza zmianę stosu i wywołuje funkcję */
     //extern "C" void force_stack_switch(uint64_t new_rsp, void (*func)());

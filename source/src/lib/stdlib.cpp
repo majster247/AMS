@@ -3,6 +3,9 @@
 #include "ams_syscall.h"
 #include "ctype.h" // upewnij się, że masz ctype.h z isspace, isdigit, isalpha
 
+
+// używaj write_serial_string i write_serial_hex do debugowania, jeśli coś pójdzie nie tak z alokacją
+
 static uint64_t heap_current = 0x70000000;
 extern "C" {
 
@@ -38,17 +41,38 @@ void free(void* ptr) {
 // Potrzebne dla TCC (nawet jako atrapy)
 void* realloc(void* ptr, size_t size) {
     if (!ptr) return malloc(size);
-    if (size == 0) { free(ptr); return NULL; }
+    if (size == 0) { 
+        free(ptr); 
+        return NULL; 
+    }
     
-    // NAJPROSTSZY REALLOC: Malloc + Memcpy + Free
+    #ifdef KERNEL_MODE
+    // Debug tylko w kernelu
+    extern void write_serial_string(const char*);
+    extern void write_serial_hex(uint64_t);
+    
+    write_serial_string("[REALLOC] ptr=");
+    write_serial_hex((uint64_t)ptr);
+    write_serial_string(" size=");
+    write_serial_hex(size);
+    write_serial_string("\n");
+    #endif
+    
+    // Sprawdź czy ptr jest valid
+    if ((uint64_t)ptr < 0x80000000 || (uint64_t)ptr >= 0x400000000) {
+        #ifdef KERNEL_MODE
+        write_serial_string("[REALLOC] ERROR: Invalid pointer!\n");
+        #endif
+        return NULL;
+    }
+    
     void* new_ptr = malloc(size);
     if (!new_ptr) return NULL;
     
-    // Kopiujemy na pałę (nie wiemy ile stary miał, zakładamy że size)
-    // To jest niebezpieczne, ale w 99% przypadków TCC powiększa bufory.
-    // W prawdziwym OS malloc trzyma wielkość bloku przed wskaźnikiem.
+    size_t copy_size = size < 4096 ? size : 4096;
     extern void* memcpy(void*, const void*, size_t);
-    memcpy(new_ptr, ptr, size); // Ryzykowne, ale zadziała na start
+    memcpy(new_ptr, ptr, copy_size);
+    
     free(ptr);
     return new_ptr;
 }

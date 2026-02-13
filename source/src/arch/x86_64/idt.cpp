@@ -146,6 +146,19 @@ extern "C" void isr_handler(registers* r) {
     write_serial_hex(cr2);
     write_serial_string("\n");
 
+    if (cr2 >= 0x02000000 && cr2 < 0x80000000) {
+        write_serial_string("!!! USER PROCESS TRIED TO ACCESS KERNEL HEAP!\n");
+        write_serial_string("This is a security violation or pointer corruption!\n");
+    }
+
+     if (cr2 >= 0x100000000ULL) { // > 4GB
+        write_serial_string("!!! ADDRESS ABOVE 4GB - NOT IDENTITY MAPPED!\n");
+    }
+    
+    if (cr2 >= 0x02000000 && cr2 < 0x80000000) {
+        write_serial_string("!!! USER TRIED TO ACCESS KERNEL HEAP!\n");
+    }
+
     write_serial_string("Halting system.\n");
     asm volatile("cli; hlt");
 }

@@ -230,6 +230,7 @@ bool ext2_init(ahci_port* port) {
 char* ext2_read_file(const char* path) {
     // 1. Znajdź węzeł pliku w VFS
     // Uwaga: Zakładamy, że ext2_root jest globalnie dostępne (zadeklarowane w ext2.h)
+
     vfs_node* node = vfs_find_node(ext2_root, path);
     
     if (!node) {
@@ -254,7 +255,7 @@ char* ext2_read_file(const char* path) {
     if (bytes_read != node->size) {
         write_serial_string("[EXT2] Warning: Read fewer bytes than expected.\n");
     }
-
+    //memcpy(buffer, kernel_data, bytes_to_copy); // Kopiuj z kernel space do user space
     return buffer;
 }
 

@@ -56,4 +56,6 @@ extern "C" {
 
     extern tss_entry system_tss;
     extern CpuData cpu_data;
+    //gdt_real
+    extern uint64_t gdt_real[9];
 }

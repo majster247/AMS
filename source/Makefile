@@ -8,7 +8,7 @@ LD = x86_64-elf-ld
 # --- Flagi Jądra (Ring 0) - PANCERNE (Bez SSE, Bez RedZone) ---
 CFLAGS = -m64 -ffreestanding -O2 -Wall -Wextra -Iinclude \
          -fno-exceptions -fno-rtti -fno-stack-protector \
-         -mno-red-zone -mno-mmx -mno-sse -mno-sse2
+         -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -DKERNEL_MODE
 
 ASFLAGS = -f elf64
 LDFLAGS = -n -T linker.ld

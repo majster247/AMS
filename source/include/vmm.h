@@ -7,6 +7,7 @@
 #define PAGE_HUGE     (1ULL << 7)
 
 extern "C" {
+    uint64_t get_cr3();
     void vmm_init_direct_map(uint64_t ram_size_mb);
     uint64_t vmm_get_phys(uint64_t virt);
     
@@ -16,6 +17,7 @@ extern "C" {
     void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags); // Legacy wrapper
     void vmm_set_nocache(uint64_t virt);
     uint64_t vmm_allocate_region(uint64_t size, uint64_t flags);
+    uint64_t vmm_create_user_pml4();
 
     //heap
     void heap_init(void* addr, uint64_t size);

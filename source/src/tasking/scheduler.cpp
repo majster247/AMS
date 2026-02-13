@@ -13,6 +13,9 @@
 
 // Importujemy funkcję z vmm.cpp (rozwiązuje błąd 'not declared')
 extern "C" uint64_t get_cr3();
+extern "C" void jump_to_user(uint64_t entry_point, uint64_t user_stack);
+extern "C" void k_memset(void* dest, int ch, size_t count);
+extern "C" void* k_strcpy(char* dest, const char* src);
 
 task* current_task = nullptr;
 task* task_list = nullptr;
@@ -238,4 +241,39 @@ void scheduler_init_kernel_task() {
     write_serial_string("[SCHEDULER] Kernel registered with CLEAN STACK at: ");
     write_serial_hex(t->kernel_stack);
     write_serial_string("\n");
+}
+
+void scheduler_switch_to_user(uint64_t entry, uint64_t user_rsp) {
+    write_serial_string("[SCHEDULER] Switching to user mode at entry: ");
+    write_serial_hex(entry);
+    write_serial_string(" with user stack: ");
+    write_serial_hex(user_rsp);
+    write_serial_string("\n");
+
+    // ✅ To powinno działać, ale sprawdźmy assembly
+    jump_to_user(entry, user_rsp);
+}
+
+
+task* create_kernel_task() {
+    task* t = (task*)kmalloc(sizeof(task));
+    if (!t) return nullptr;
+    
+    k_memset(t, 0, sizeof(task));
+    
+    // Zapisz obecny stan kernela
+    asm volatile("mov %%rsp, %0" : "=r"(t->rsp));
+    
+    // CR3 kernela
+    t->cr3 = get_cr3();
+    
+    // Kernel stack (alokuj nowy dla bezpieczeństwa)
+    t->kstack_top = (uint64_t)kmalloc(8192) + 8192;
+    
+    // RIP będzie ustawiony później w kmain
+    t->rip = 0;
+    
+    k_strcpy(t->name, "kernel");
+    
+    return t;
 }
