@@ -491,28 +491,28 @@ extern "C" void syscall_handler(registers* regs) {
         
         case 60: { // EXIT
                 int code = (int)regs->rdi;
-                    
+
                 write_serial_string("[EXIT] Process finished with code: ");
                 write_serial_dec(code);
                 write_serial_string("\n");
-                    
+
                 // Sprawdź kupa.o
-                if (0 == 0) { // na razie zawsze sprawdzamy, ale możesz tu dodać warunek, np. if (code == 0) { ... }
+                if (current_task) {
                     write_serial_string("[KERNEL] TCC finished! Checking kupa.o...\n");
-                    
+
                     vfs_node* kupa_o = vfs_find("kupa.o");
                     if (kupa_o) {
                         write_serial_string("[KUPA.O] Size: ");
                         write_serial_dec(kupa_o->size);
                         write_serial_string(" bytes\n");
-                        
+
                         write_serial_string("[KUPA.O] ELF Header: ");
                         for (int i = 0; i < 16 && i < kupa_o->size; i++) {
                             write_serial_hex(kupa_o->tar_data[i]);
                             write_serial_char(' ');
                         }
                         write_serial_string("\n");
-                        
+
                         if (kupa_o->size >= 4 && 
                             kupa_o->tar_data[0] == 0x7F &&
                             kupa_o->tar_data[1] == 'E' &&
@@ -522,8 +522,7 @@ extern "C" void syscall_handler(registers* regs) {
                         }
                     }
                 }
-                
-                // ✅ Wróć do kernel task przez iretq
+
                 extern task* kernel_task;
                 if (kernel_task && kernel_task->rip != 0) {
                     write_serial_string("[EXIT] Returning to kernel...\n");
@@ -536,15 +535,19 @@ extern "C" void syscall_handler(registers* regs) {
                     write_serial_string("[EXIT] CR3 = ");
                     write_serial_hex(kernel_task->cr3);
                     write_serial_string("\n");
-                    
+
                     // Przywróć CR3
                     asm volatile("mov %0, %%cr3" : : "r"(kernel_task->cr3));
-                    
-                    // ✅ POPRAWKA: Użyj dokładnie zapisanego RSP
+
+                    // ✅ POPRAWKA: Zachowaj RIP na stosie PRZED czyszczeniem rejestrów
+                    uint64_t target_rip = kernel_task->rip;
+                    uint64_t target_rsp = kernel_task->kstack_top;
+
                     asm volatile(
-                        "cli\n"                       // Wyłącz przerwania
-                        "mov %0, %%rsp\n"             // Załaduj kernel RSP (BEZ -8!)
-                        "xor %%rax, %%rax\n"          // Wyczyść rejestry
+                        "cli\n"
+                        "mov %0, %%rsp\n"      // Załaduj RSP
+                        "push %1\n"            // Push RIP na stos (PRZED czyszczeniem!)
+                        "xor %%rax, %%rax\n"   // Teraz możemy czyścić
                         "xor %%rbx, %%rbx\n"
                         "xor %%rcx, %%rcx\n"
                         "xor %%rdx, %%rdx\n"
@@ -559,15 +562,15 @@ extern "C" void syscall_handler(registers* regs) {
                         "xor %%r13, %%r13\n"
                         "xor %%r14, %%r14\n"
                         "xor %%r15, %%r15\n"
-                        "jmp *%1\n"                   // Skocz bezpośrednio (bez push/ret)
+                        "ret\n"                // Return do RIP ze stosu
                         :
-                        : "r"(kernel_task->kstack_top), "r"(kernel_task->rip)
+                        : "r"(target_rsp), "r"(target_rip)
                         : "memory"
                     );
-                    
+
                     // NIGDY nie dotrzemy tutaj
                 }
-                
+
                 while(1) asm("hlt");
             }
         

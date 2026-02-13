@@ -263,7 +263,6 @@ void kmain_post_stack_switch() {
     asm volatile("sti");
     log_step("GUI Loop starting...");
 
-    // tcc args
     const char* tcc_args[] = { "tcc", "-I/", "-c", "/kupa.c", nullptr };
 
     write_serial_string("[TEST] Spawning TCC with args:\n");
@@ -275,38 +274,36 @@ void kmain_post_stack_switch() {
 
     write_serial_string("[TEST] Preparing to spawn TCC, spawning kernel task for return like voldemort...\n");
     
-    // ✅ Stwórz kernel task
     kernel_task = create_kernel_task();
-    if (!kernel_task) {
-        write_serial_string("[ERROR] Failed to create kernel task!\n");
-        while(1) asm("hlt");
-    }
-
-    // ✅ Ustaw RIP na label PONIŻEJ
     kernel_task->rip = (uint64_t)&&after_exec;
     
-    // ✅ Zapisz RSP i CR3
     asm volatile("mov %%rsp, %0" : "=r"(kernel_task->kstack_top));
-    kernel_task->cr3 = get_cr3();   
-    // ✅ Uruchom TCC (TYLKO RAZ, bez goto!)
-    sys_exec("/tcc", 4, (char**)tcc_args);
+    kernel_task->cr3 = get_cr3();
     
-    // ❌ NIGDY nie dotrzemy tutaj (sys_exec nie wraca)
-
-    //jak to nie? wracamy i wykonujemy kod poniżej, bo sys_exec ustawił RIP kernel_task na after_exec i po EXIT z tcc skoczymy do after_exec, gdzie mamy main loop GUI
-    const char* tcc_args2[] = { "tcc", "-run", "/kupa.c", nullptr };
-    sys_exec("/tcc", 3, (char**)tcc_args2);
-
+    write_serial_string("[KERNEL] Saved kernel_task->rip = ");
+    write_serial_hex(kernel_task->rip);
+    write_serial_string("\n");
+    
+    sys_exec("/tcc", 4, (char**)tcc_args);
     
 after_exec:
     // ✅ TUTAJ wrócisz po EXIT
     write_serial_string("\n");
     write_serial_string("╔════════════════════════════════════════╗\n");
     write_serial_string("║  🎉 RETURNED FROM TCC SUCCESSFULLY! 🎉 ║\n");
+    write_serial_string("║                                        ║\n");
+    write_serial_string("║  ✅ TCC compiled kupa.c → kupa.o       ║\n");
+    write_serial_string("║  ✅ Valid ELF object file created!     ║\n");
+    write_serial_string("║                                        ║\n");
+    write_serial_string("║  🚀 Entering GUI main loop...          ║\n");
     write_serial_string("╚════════════════════════════════════════╝\n");
     write_serial_string("\n");
     
-    // ✅ Main loop (GUI działa!)
+    // ❌ USUŃ TO (lub zakomentuj):
+    // const char* tcc_args2[] = { "tcc", "-run", "/kupa.c", nullptr };
+    // sys_exec("/tcc", 3, (char**)tcc_args2);
+    
+    // ✅ Main loop GUI
     write_serial_string("[KERNEL] Entering main loop...\n");
     
     while(true) {
@@ -317,6 +314,7 @@ after_exec:
         asm volatile("int $0x20");
     }
 }
+
 
 extern "C" void kmain(uint64_t multiboot_info_address) {
     init_serial();
