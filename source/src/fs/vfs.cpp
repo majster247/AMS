@@ -78,32 +78,54 @@ static char* k_strstr(const char* haystack, const char* needle) {
 
 vfs_node* vfs_find(const char* name) {
     if (!name || name[0] == '\0') return nullptr;
+
+    // 1. Pomiń WSZYSTKIE wiodące slashe (naprawia problem z //tccdefs.h)
+    const char* clean_name = name;
+    while (*clean_name == '/') {
+        clean_name++;
+    }
+
+    // 1b. Pomiń powtarzające się prefiksy "./"
+    while (clean_name[0] == '.' && clean_name[1] == '/') {
+        clean_name += 2;
+    }
+
+    // 1c. Zachowujemy pełną ścieżkę jako pierwszy wybór (Linux-like).
+    // Flat basename używamy tylko jako fallback kompatybilności.
+    const char* original_clean_name = clean_name;
+
+    // 2. Jeśli nazwa była samym "/" i teraz jest pusta, zwróć root (lub błąd jeśli nie obsługujesz)
+    if (*clean_name == '\0') return nullptr;
+
     write_serial_string("[VFS] vfs_find called with: \"");
     write_serial_string(name);
     write_serial_string("\"\n");
-    
-    // ✅ Mapuj /usr/lib/tcc/include/* na /tccdefs.h
-    if (k_strstr(name, "/usr/lib/tcc/include/") || 
-        k_strstr(name, "/usr/local/lib/tcc/include/")) {
-        write_serial_string("[VFS] Redirecting to /tccdefs.h\n");
-        name = "/tccdefs.h";
-    }
-    
-    // Usuń leading slash
-    if (name[0] == '/') name++;
-    // Jeśli po ostatnim '/' nic nie ma (np. ścieżka to "/"), zwróć błąd
-    if (name[0] == '\0') return nullptr;
 
-    write_serial_string("[VFS] Szukam surowej nazwy: ");
-    write_serial_string(name);
+    // 3. Mapowanie nagłówków TCC
+    // Używamy clean_name, żeby nie martwić się o slashe na początku
+    if (k_strstr(clean_name, "usr/lib/tcc/include/") || 
+        k_strstr(clean_name, "usr/local/lib/tcc/include/")) {
+        
+        // Wyciągamy samą nazwę pliku po ścieżce tcc (np. stdio.h)
+        const char* hdr_last_slash = clean_name;
+        const char* p = clean_name;
+        while(*p) {
+            if (*p == '/') hdr_last_slash = p + 1;
+            p++;
+        }
+        clean_name = hdr_last_slash;
+        write_serial_string("[VFS] Redirecting TCC include to: ");
+        write_serial_string(clean_name);
+        write_serial_string("\n");
+    }
+
+    write_serial_string("[VFS] Szukam pelnej nazwy: ");
+    write_serial_string(original_clean_name);
     write_serial_string("\n");
 
     vfs_node* curr = vfs_root;
     while (curr) {
-        write_serial_string("  Sprawdzam: ");
-        write_serial_string(curr->name);
-        write_serial_string("\n");
-        if (strcmp(curr->name, name) == 0) {
+        if (strcmp(curr->name, original_clean_name) == 0) {
             write_serial_string("[VFS] Znaleziono plik: ");
             write_serial_string(curr->name);
             write_serial_string("\n");
@@ -111,18 +133,38 @@ vfs_node* vfs_find(const char* name) {
         }
         curr = curr->next;
     }
+
+    // Fallback: flat basename dla istniejących artefaktów AMS.
+    const char* last_slash = original_clean_name;
+    for (const char* p = original_clean_name; *p; ++p) {
+        if (*p == '/') last_slash = p + 1;
+    }
+    const char* fallback_name = (*last_slash) ? last_slash : original_clean_name;
+    if (strcmp(fallback_name, original_clean_name) != 0) {
+        write_serial_string("[VFS] Fallback basename: ");
+        write_serial_string(fallback_name);
+        write_serial_string("\n");
+
+        curr = vfs_root;
+        while (curr) {
+            if (strcmp(curr->name, fallback_name) == 0) {
+                write_serial_string("[VFS] Znaleziono plik (fallback): ");
+                write_serial_string(curr->name);
+                write_serial_string("\n");
+                return curr;
+            }
+            curr = curr->next;
+        }
+    }
+
+    write_serial_string("[VFS] NIE ZNALEZIONO: ");
+    write_serial_string(original_clean_name);
+    write_serial_string("\n");
     return nullptr;
 }
 
 size_t vfs_read(vfs_node* node, uint64_t offset, size_t size, uint8_t* buffer) {
     // Walidacja buffer (musi być user space!)
-    if ((uint64_t)buffer < 0x1000 || (uint64_t)buffer >= 0x800000000000ULL) {
-        write_serial_string("[VFS] ERROR: Buffer not in user space! buf=");
-        write_serial_hex((uint64_t)buffer);
-        write_serial_string("\n");
-        return 0;
-    }
-    
     if (node->read) {
         // Odczyt z EXT2
         return node->read(node, offset, size, buffer);

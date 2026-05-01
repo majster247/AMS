@@ -1,21 +1,21 @@
 [BITS 64]
 
-; --- MAKRA BEZ ZMIAN ---
+; --- MAKRA DO GENEROWANIA ENTRY POINTÓW ---
 %macro ISR_NOERRCODE 1
     global isr%1
     isr%1:
         cli
         push 0                  ; Dummy error code
-        push %1                 ; Numer ISR
-        jmp isr_common_stub
+        push %1                 ; Numer przerwania
+        jmp common_stub
 %endmacro
 
 %macro ISR_ERRCODE 1
     global isr%1
     isr%1:
         cli
-        push %1                 ; Numer ISR (kod błędu już jest)
-        jmp isr_common_stub
+        push %1                 ; Numer przerwania (kod błędu już jest na stosie)
+        jmp common_stub
 %endmacro
 
 %macro IRQ 2
@@ -23,11 +23,11 @@
     irq%1:
         cli
         push 0                  ; Dummy error code
-        push %2                 ; Numer IRQ
-        jmp irq_common_stub
+        push %2                 ; Mapowanie na IDT (np. IRQ0 -> 32)
+        jmp common_stub
 %endmacro
 
-; --- LISTA PRZERWAŃ (BEZ ZMIAN) ---
+; --- DEFINICJE PRZERWAŃ ---
 ISR_NOERRCODE 0
 ISR_NOERRCODE 1
 ISR_NOERRCODE 2
@@ -58,11 +58,10 @@ ISR_NOERRCODE 26
 ISR_NOERRCODE 27
 ISR_NOERRCODE 28
 ISR_NOERRCODE 29
-ISR_NOERRCODE 30
+ISR_ERRCODE   30
 ISR_NOERRCODE 31
 
-ISR_NOERRCODE 128
-
+; --- IRQ (Mapowane od 32 wzwyż) ---
 IRQ 0, 32
 IRQ 1, 33
 IRQ 2, 34
@@ -80,147 +79,76 @@ IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
 
-extern isr_handler
-extern irq_handler
+; --- SYSCALL (Legacy INT 0x80) ---
+global isr128
+isr128:
+    cli
+    push 0
+    push 128
+    jmp common_stub
+
+; --- COMMON STUB ---
+extern interrupt_handler
 extern schedule
 
-; ----------------------------------------------------
-; STUB DLA WYJĄTKÓW
-; ----------------------------------------------------
-isr_common_stub:
-    ; Zapisujemy tylko 15 rejestrów ogólnych (zgodnie ze struct registers w C++)
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
+common_stub:
+    ; Pchanie rejestrów w kolejności struktury 'registers' (od tyłu)
     push r15
-
-    ; Ustawiamy segmenty jądra (ważne, jeśli przerwanie przyszło z Ring 3)
-    xor rax, rax
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-
-    mov rdi, rsp       ; Arg 1: wskaźnik na registers (stos)
-    call isr_handler
-    jmp common_exit
-
-; ----------------------------------------------------
-; STUB DLA SPRZĘTU (IRQ)
-; ----------------------------------------------------
-irq_common_stub:
-    ; 1. Zapisz 15 rejestrów (15 * 8 = 120 bajtów)
-    ; UWAGA: NIE zapisujemy tutaj DS na stosie, bo psuje to wyrównanie z C++!
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
     push r14
-    push r15
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rbp
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push rbx
+    push rax
 
-    ; 2. Ustaw segmenty Kernela
-    xor rax, rax
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
+    ; Sprawdzenie czy przerwanie przyszło z User Mode (Ring 3)
+    ; CS znajduje się pod [rsp + 120 + 16] (15 regs + 2 info)
+    test qword [rsp + 136], 3 
+    jz .in_kernel
+    swapgs                  ; Wejście z User -> załaduj Kernel GS
+.in_kernel:
 
-    ; 3. Wywołaj Handler C++
-    mov rdi, rsp       ; 1. arg: registers*
+    mov rdi, rsp            ; RDI = registers*
+    call interrupt_handler
 
-    ; POPRAWIONY OFFSET: 120 (15 rejestrów * 8 bajtów)
-    ; [rsp + 0]   = r15
-    ; ...
-    ; [rsp + 112] = rax
-    ; [rsp + 120] = Numer Przerwania (to co pushnęło makro)
-    mov rsi, [rsp + 120] 
-    
-    call irq_handler
-
-    ; 4. Scheduler (Dla IRQ0 / 32)
-    mov rbx, [rsp + 120] ; Pobierz numer ponownie (offset 120!)
-    cmp rbx, 32
-    jne common_exit
+    ; Obsługa Schedulera (tylko dla Timer IRQ0 = 32)
+    cmp qword [rsp + 120], 32
+    jne .no_reschedule
     
     mov rdi, rsp
-    call schedule      ; schedule zwraca nowy RSP (może być ze stosu Usera)
-    mov rsp, rax       ; Podmiana stosu
+    call schedule
+    mov rsp, rax            ; Przełączenie stosu na nowy proces
+.no_reschedule:
 
-common_exit:
-    ; 1. Przywróć 15 rejestrów
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
+    ; Wyjście: Jeśli wracamy do Ring 3, swapgs z powrotem
+    test qword [rsp + 136], 3
+    jz .skip_swapgs
+    swapgs
+.skip_swapgs:
+
+    pop rax
     pop rbx
-    pop rax
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
     
-    ; W tym punkcie RSP wskazuje na int_no.
-    ; Układ stosu: [int_no], [err_code], [RIP], [CS], [RFLAGS], [RSP], [SS]
-
-    ; 2. Sprawdź Ring (CS jest 24 bajty od obecnego RSP)
-    test byte [rsp + 24], 3
-    jz .skip_segment_reset
-
-    ; Powrót do Ring 3 - zerujemy DS/ES (używamy AX, bo RAX już przywrócony!)
-    push rax
-    xor ax, ax
-    mov ds, ax
-    mov es, ax
-    pop rax
-
-.skip_segment_reset:
-    ; 3. Usuwamy int_no i err_code
-    add rsp, 16
-
-    ; 4. FINALNY POWRÓT
+    add rsp, 16             ; Usuń int_no i err_code
     iretq
-
-global switch_to_kernel_stack
-
-; void switch_to_kernel_stack(void* new_stack, void (*func)())
-; RDI = Nowy Stos
-; RSI = Funkcja do skoku
-global switch_to_kernel_stack
-switch_to_kernel_stack:
-    cli                 
-    mov rsp, rdi        
-    mov rbp, rsp        
-    
-    and rsp, -16        ; Wyrównaj do 16 bajtów
-    ; sub rsp, 8        <-- USUŃ TO. To psuło wyrównanie przy jmp.
-    
-    jmp rsi
-
-.hang:
-    hlt
-    jmp .hang

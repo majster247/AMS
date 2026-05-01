@@ -57,5 +57,18 @@ extern "C" {
     extern tss_entry system_tss;
     extern CpuData cpu_data;
     //gdt_real
-    extern uint64_t gdt_real[9];
+    extern uint64_t gdt_real[11]; // 9 standardowych + 2 dla TSS
+
+    //main_kernel_stack i double_fault_stack są w gdt.cpp, ale deklarujemy je tutaj, bo są potrzebne do ustawienia TSS
+    
+    // DEFINICJA STOSU JĄDRA
+    // Musi być wyrównany do 16 bajtów dla ABI x86_64
+
+    
+    //task jest w task.h i tam jest deklarowany, ale potrzebujemy tego symbolu do ustawienia TSS
+
+    static uint8_t main_kernel_stack[16384] __attribute__((aligned(16)));
+    static uint8_t double_fault_stack[8192];
+    
+    uint64_t get_kernel_stack_top();
 }

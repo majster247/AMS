@@ -2,141 +2,119 @@
 #include "vmm.h"
 #include "heap.h"
 #include "kernel.h"
-#include "heap.h"
 #include "ext2.h"
 #include "elf.h"
 
+
+//lokalna definicja strcpy dla tego pliku (aby nie mieszać z globalnym)
+static void strcpy(char* dest, const char* src) {
+    while (*src) {
+        *dest++ = *src++;
+    }
+    *dest = '\0';
+}
+
 extern "C" void jump_to_ring3(uint64_t entry, uint64_t rsp);
 
-void load_elf_and_run(const char* path) {
+void load_elf(const char* path) {
     vfs_node* file = vfs_find(path);
     if (!file) {
         write_serial_string("[ELF] Nie znaleziono pliku!\n");
         return;
     }
 
+    //Tworzymy przestrzeń adresową dla procesu (PML4)
+    uint64_t new_pml4 = vmm_create_user_pml4();
+
+    // Odczyt nagłówka ELF
     Elf64_Ehdr ehdr;
     file->read(file, 0, sizeof(Elf64_Ehdr), (uint8_t*)&ehdr);
 
-    // Sprawdzenie sygnatury \x7F ELF
-    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E') return;
+    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E') {
+        write_serial_string("[ELF] Bledna sygnatura ELF\n");
+        return;
+    }
 
-    for (int i = 0; i < ehdr.e_phnum; i++) {
+   for (int i = 0; i < ehdr.e_phnum; i++) {
         Elf64_Phdr phdr;
         file->read(file, ehdr.e_phoff + (i * ehdr.e_phentsize), sizeof(Elf64_Phdr), (uint8_t*)&phdr);
 
         if (phdr.p_type == 1) { // PT_LOAD
-            uint64_t pages = (phdr.p_memsz + 4095) / 4096;
-            for (uint64_t j = 0; j < pages; j++) {
-                uint64_t phys = (uint64_t)pmm_alloc_frame();
-                vmm_map_user(phdr.p_vaddr + (j * 4096), phys, true); // Mapowanie USER
-            }
-            // Wczytanie danych sekcji
-            file->read(file, phdr.p_offset, phdr.p_filesz, (uint8_t*)phdr.p_vaddr);
-            // BSS (zerowanie reszty)
-            if (phdr.p_memsz > phdr.p_filesz) {
-                memset((void*)(phdr.p_vaddr + phdr.p_filesz), 0, phdr.p_memsz - phdr.p_filesz);
-            }
-        }
-    }
+            uint64_t vaddr = phdr.p_vaddr;
+            uint64_t filesz = phdr.p_filesz;
+            uint64_t memsz = phdr.p_memsz;
+            uint64_t offset = phdr.p_offset;
 
-    // Alokacja stosu użytkownika (wysoki adres)
-    uint64_t stack_virt = 0x7FFFFFFFF000;
-    uint64_t stack_phys = (uint64_t)pmm_alloc_frame();
-    vmm_map_user(stack_virt, stack_phys, true);
-
-    write_serial_string("[ELF] Skok do Ring 3...\n");
-    jump_to_ring3(ehdr.e_entry, stack_virt + 4096);
-}
-
-bool elf_load(const char* path) {
-    write_serial_string("[ELF] Loading: ");
-    write_serial_string(path);
-    write_serial_string("\n");
-
-    // 1. Otwórz plik
-    // Uwaga: używamy ext2_read_file, która alokuje bufor w jądrze. 
-    // Docelowo lepiej czytać kawałkami, ale na start to wystarczy.
-    char* file_buffer = ext2_read_file(path);
-    if (!file_buffer) {
-        write_serial_string("[ELF] Error: File not found.\n");
-        return false;
-    }
-
-    Elf64_Ehdr* hdr = (Elf64_Ehdr*)file_buffer;
-
-    // 2. Sprawdź magię
-    if (*(uint32_t*)hdr->e_ident != ELF_MAGIC) {
-        write_serial_string("[ELF] Error: Invalid MAGIC.\n");
-        kfree(file_buffer);
-        return false;
-    }
-
-    // 3. Iteruj po Program Headers (Segmentach)
-    Elf64_Phdr* phdr = (Elf64_Phdr*)(file_buffer + hdr->e_phoff);
-    
-    for (int i = 0; i < hdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_LOAD) {
-            // Dla każdego segmentu LOAD:
-            // Musimy zmapować pamięć pod adres p_vaddr.
+            uint64_t page_count = (memsz + 4095) / 4096;
             
-            uint64_t vaddr = phdr[i].p_vaddr;
-            uint64_t memsz = phdr[i].p_memsz;
-            uint64_t filesz = phdr[i].p_filesz;
-            uint64_t offset = phdr[i].p_offset;
-
-            // Wyrównanie do strony
-            uint64_t start_page = vaddr & ~0xFFF;
-            uint64_t end_page = (vaddr + memsz + 0xFFF) & ~0xFFF;
-            uint64_t page_count = (end_page - start_page) / 4096;
-
-            // Alokujemy fizyczne strony i mapujemy je "na sztywno" tam, gdzie chce ELF
             for (uint64_t j = 0; j < page_count; j++) {
-                void* phys = pmm_alloc_frame();
-                write_serial_string("[ELF] Mapuje segment PT_LOAD...\n");
-                write_serial_string("  Virt: ");
-                write_serial_hex(start_page + j*4096);
-                write_serial_string(" Phys: ");
-                write_serial_hex((uint64_t)phys);
-                write_serial_string("\n");
-                vmm_map_page(start_page + j*4096, (uint64_t)phys, PAGE_USER | PAGE_WRITABLE | PAGE_PRESENT);
-                // Zerujemy na wszelki wypadek (BSS tego wymaga)
-                memset((void*)(start_page + j*4096), 0, 4096);
-            }
+                void* phys_page = pmm_alloc_frame();
+                vmm_map_page_ex(new_pml4, vaddr + j * 4096, (uint64_t)phys_page, PAGE_USER | PAGE_WRITABLE | PAGE_PRESENT);
+                
+                // POPRAWKA: Czyścimy ramkę przez HHDM, nie przez vaddr!
+                uint64_t hhdm_vaddr = (uint64_t)phys_page + 0xFFFF800000000000ULL;
+                memset((void*)hhdm_vaddr, 0, 4096);
 
-            // Kopiujemy dane z pliku do pamięci
-            // Uwaga: To zadziała tylko, jeśli mamy Identity Mapping dla tego zakresu
-            // lub jesteśmy w kontekście CR3, gdzie te strony są widoczne.
-            // W Twoim kernelu taski dzielą CR3 (na razie), więc to zadziała.
-            write_serial_string("[ELF] Kopiuje segment do: ");
+                // POPRAWKA: Kopiujemy dane z pliku kawałek po kawałku do każdej ramki
+                // Obliczamy ile danych z pliku wpada do tej konkretnej strony
+                uint64_t page_offset = j * 4096;
+                if (page_offset < filesz) {
+                    uint64_t to_read = (filesz - page_offset > 4096) ? 4096 : (filesz - page_offset);
+                    file->read(file, offset + page_offset, to_read, (uint8_t*)hhdm_vaddr);
+                }
+            }
+            write_serial_string("[ELF] Zaladowano segment pod: ");
             write_serial_hex(vaddr);
             write_serial_string("\n");
-            memcpy((void*)vaddr, file_buffer + offset, filesz);
-            
-            // Jeśli memsz > filesz, reszta jest już wyzerowana (BSS)
         }
     }
 
-    // 4. Stwórz Stos Użytkownika
-    // Alokujemy np. 16KB na stos pod adresem np. 0x80000000
-    uint64_t user_stack_top = 0x80000000;
-    for(int i=0; i<4; i++) { // 4 strony stosu
-        void* phys = pmm_alloc_frame();
-        vmm_map_page(user_stack_top - (i+1)*4096, (uint64_t)phys, PAGE_USER | PAGE_WRITABLE | PAGE_PRESENT);
+    // 2. Przygotowanie Stosu (Zmień mapowanie na HHDM)
+    uint64_t stack_top_virtual = 0x80000000;
+    uint64_t stack_phys[4];
+    for (int i = 0; i < 4; i++) {
+        stack_phys[i] = (uint64_t)pmm_alloc_frame();
+        vmm_map_page_ex(new_pml4, (stack_top_virtual - 16384) + i * 4096, stack_phys[i], PAGE_USER | PAGE_WRITABLE | PAGE_PRESENT);
+        memset((void*)(stack_phys[i] + 0xFFFF800000000000ULL), 0, 4096);
     }
 
-    write_serial_string("[ELF] Entry Point: ");
-    write_serial_hex(hdr->e_entry); // Masz funkcję write_serial_hex w kernel.h?
+    // ABI STACK SETUP (piszemy do ostatniej ramki stosu przez HHDM)
+    uint64_t last_stack_frame_hhdm = stack_phys[3] + 0xFFFF800000000000ULL;
+    uint64_t* rsp_hhdm = (uint64_t*)(last_stack_frame_hhdm + 4096);
+
+    // Kopiowanie argumentów (uproszczone dla testu)
+    rsp_hhdm = (uint64_t*)((uint64_t)rsp_hhdm - 16);
+    strcpy((char*)rsp_hhdm, "/tools/compiler/tcc");
+    uint64_t arg_vaddr = stack_top_virtual - 16; 
+
+    rsp_hhdm--; *rsp_hhdm = 0;               // envp
+    rsp_hhdm--; *rsp_hhdm = 0;               // argv[1]
+    rsp_hhdm--; *rsp_hhdm = arg_vaddr;       // argv[0] (adres wirtualny!)
+    rsp_hhdm--; *rsp_hhdm = 1;               // argc
+
+    uint64_t final_user_rsp = stack_top_virtual - (uint64_t)( (last_stack_frame_hhdm + 4096) - (uint64_t)rsp_hhdm );
+
+    // 3. Skok do Ring 3
+    write_serial_string("[ELF] Skok do Entry Point: ");
+    write_serial_hex(ehdr.e_entry);
+    write_serial_string(" ze stosem: ");
+    write_serial_hex(final_user_rsp);
     write_serial_string("\n");
 
-    if (hdr->e_entry < 0x4000000) {
-        write_serial_string("[ELF] WARNING: Suspiciously low Entry Point!\n");
+    //przełączamy się do Ring 3, skacząc pod punkt wejścia z ustawionym RSP na przygotowany stos użytkownika
+    //przełączamy przestrzeń adresową na tę z mapowaniem użytkownika (new_pml4) i skaczemy pod punkt wejścia z RSP ustawionym na przygotowany stos
+    set_cr3(new_pml4); // Ustawiamy nowy PML4, żeby procesor widział mapowanie użytkownika
+    write_serial_string("[ELF] CR3 ustawiony na nowy PML4. Przełączam do Ring 3...\n");
+    // Dla debugowania, możemy wypisać pierwsze bajty kodu pod punktem wejścia, żeby upewnić się, że jest tam poprawny kod
+     uint64_t entry = ehdr.e_entry;
+     uint8_t* code = (uint8_t*)entry;
+    
+    write_serial_string("[DEBUG] First 5 bytes at entry: ");
+    for(int i=0; i<5; i++) {
+        write_serial_hex(code[i]);
+        write_serial_string(" ");
     }
+    write_serial_string("\n");
 
-    // 5. Dodaj zadanie do schedulera
-    scheduler_add_user_task((void*)hdr->e_entry, (void*)user_stack_top);
-
-    write_serial_string("[ELF] Process started!\n");
-    kfree(file_buffer);
-    return true;
+    jump_to_ring3(ehdr.e_entry, final_user_rsp);
 }

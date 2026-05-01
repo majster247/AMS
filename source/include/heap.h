@@ -17,6 +17,8 @@ extern "C" {
     void* malloc(size_t size);
     /** @brief Standardowy alias free */
     void free(void* ptr);
+
+    void heap_init(void* addr, uint64_t size);
 }
 
 /** === C++ Operators Overloading === */

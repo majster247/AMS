@@ -221,10 +221,13 @@ LIBTCCAPI int tcc_run(TCCState *s1, int argc, char **argv)
         return 0;
 
     tcc_add_symbol(s1, "__rt_exit", rt_exit);
-    s1->run_main = "_runmain", top_sym = "main";
+    /* AMS-1: -nostdlib testy nadal mogą wołać exit(); zapewnij symbol. */
+    tcc_add_symbol(s1, "exit", exit);
+    // AMS-1: nie dostarczamy runmain.o z toolchaina hosta.
+    // Wołamy bezpośrednio userowe "main" (lub entry z elf_entryname).
+    s1->run_main = top_sym = "main";
     if (s1->elf_entryname)
         s1->run_main = top_sym = s1->elf_entryname;
-    tcc_add_support(s1, "runmain.o");
 
     if (tcc_relocate(s1) < 0)
         return -1;

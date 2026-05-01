@@ -77,6 +77,10 @@ uint64_t ext2_read_node(vfs_node* node, uint64_t offset, uint64_t size, uint8_t*
     // Bufory cache dla bloków pośrednich
     uint32_t* indirect_buf = (uint32_t*)kmalloc(block_size);
     uint32_t  cached_indirect_block = 0;
+    uint32_t* doubly_lvl1_buf = (uint32_t*)kmalloc(block_size);
+    uint32_t* doubly_lvl2_buf = (uint32_t*)kmalloc(block_size);
+    uint32_t  cached_doubly_lvl1_block = 0;
+    uint32_t  cached_doubly_lvl2_block = 0;
     
     // Bufor na dane (gdy offset nie jest wyrównany)
     uint8_t* data_buf = (uint8_t*)kmalloc(block_size);
@@ -101,7 +105,34 @@ uint64_t ext2_read_node(vfs_node* node, uint64_t offset, uint64_t size, uint8_t*
             }
             disk_block = indirect_buf[block_idx - 12];
         }
-        // C. Podwójny pośredni (Pominięte dla prostoty, filmy < 4GB na 4KB blokach działają na pojedynczym/podwójnym)
+        // C. Podwójny pośredni
+        else {
+            uint64_t dbl_idx = block_idx - (12 + ptrs_per_block);
+            uint32_t lvl1_index = (uint32_t)(dbl_idx / ptrs_per_block);
+            uint32_t lvl2_index = (uint32_t)(dbl_idx % ptrs_per_block);
+
+            uint32_t dbl_root = node->blocks[13];
+            if (dbl_root != 0) {
+                if (cached_doubly_lvl1_block != dbl_root) {
+                    ext2_read_block(dbl_root, (uint8_t*)doubly_lvl1_buf);
+                    cached_doubly_lvl1_block = dbl_root;
+                    cached_doubly_lvl2_block = 0; // level-2 cache zalezy od level-1
+                }
+
+                if (lvl1_index < ptrs_per_block) {
+                    uint32_t lvl2_block = doubly_lvl1_buf[lvl1_index];
+                    if (lvl2_block != 0) {
+                        if (cached_doubly_lvl2_block != lvl2_block) {
+                            ext2_read_block(lvl2_block, (uint8_t*)doubly_lvl2_buf);
+                            cached_doubly_lvl2_block = lvl2_block;
+                        }
+                        if (lvl2_index < ptrs_per_block) {
+                            disk_block = doubly_lvl2_buf[lvl2_index];
+                        }
+                    }
+                }
+            }
+        }
         
         if (disk_block == 0) {
             memset(buffer + bytes_read, 0, chunk_len);
@@ -119,6 +150,8 @@ uint64_t ext2_read_node(vfs_node* node, uint64_t offset, uint64_t size, uint8_t*
     }
 
     kfree(indirect_buf);
+    kfree(doubly_lvl1_buf);
+    kfree(doubly_lvl2_buf);
     kfree(data_buf);
     return bytes_read;
 }

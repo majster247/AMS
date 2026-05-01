@@ -6,8 +6,22 @@
 extern uint64_t ram_size_mb;
 extern uint32_t fb_width;
 extern uint32_t fb_height;
+extern "C" int sys_exec(const char* path, int argc, char** argv);
+extern "C" void kernel_return_point();
 
 extern "C" void graphics_draw_bmp_centered(); 
+
+static void launch_user_app(const char* path, int argc, char** argv) {
+    if (!current_task) return;
+    kernel_task = current_task;
+    kernel_task->rip = (uint64_t)kernel_return_point;
+    int rc = sys_exec(path, argc, argv);
+    if (rc != 0) {
+        write_serial_string("[GUI] Failed to launch: ");
+        write_serial_string(path);
+        write_serial_string("\n");
+    }
+}
 
 void str_copy(char* d, const char* s) {
     int i=0; while(s[i] && i<63) { d[i] = s[i]; i++; } d[i]=0;
@@ -244,7 +258,7 @@ void Desktop::DrawTaskbar() {
 
 void Desktop::DrawLauncher() {
     if (!start_menu_open) return;
-    int menu_w = 400; int menu_h = 320;
+    int menu_w = 400; int menu_h = 360;
     int x = (fb_width - menu_w) / 2; int y = (fb_height - menu_h) / 2;
 
     // Cień i Tło Menu (Zaokrąglone)
@@ -255,9 +269,9 @@ void Desktop::DrawLauncher() {
     graphics_print(x + 20, y + 20, "APPS", COL_NORD8);
     graphics_draw_rect(x + 20, y + 40, menu_w - 40, 2, COL_NORD2);
 
-    const char* apps[] = {"Terminal", "XEyes", "Files", "Video", "Settings", "Shutdown"};
+    const char* apps[] = {"Terminal", "XEyes", "Files", "Video", "Settings", "Doom", "Wayland", "WaylandCli", "WaylandEGL", "Shutdown"};
     int ty = y + 60;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 10; i++) {
         // Hover effect symulowany (można dodać logikę w Update)
         // Rysujemy "Button" tło
         DrawRoundedRect(x + 20, ty, menu_w - 40, 30, 6, COL_NORD2);
@@ -306,7 +320,7 @@ void Desktop::Update(int mx, int my, bool left_click) {
 
     // LAUNCHER
     if (clicked && start_menu_open) {
-        int menu_w = 400; int menu_h = 320;
+        int menu_w = 400; int menu_h = 360;
         int lx = (fb_width - menu_w) / 2; int ly = (fb_height - menu_h) / 2;
         
         if (mx >= lx && mx <= lx + menu_w && my >= ly && my <= ly + menu_h) {
@@ -320,7 +334,37 @@ void Desktop::Update(int mx, int my, bool left_click) {
                     case 2: AddWindow(new FileManagerWindow(400, 150)); break;
                     case 3: AddWindow(new VideoPlayerWindow(100, 100, "movie.vid")); break;
                     case 4: AddWindow(new SettingsWindow(200, 200)); break;
-                    case 5: start_menu_open = false; break;
+                    case 5: {
+                        char* doom_argv[4];
+                        doom_argv[0] = (char*)"/programs/doom/doom.base.elf";
+                        doom_argv[1] = (char*)"-iwad";
+                        doom_argv[2] = (char*)"/programs/doom/freedoom1.wad";
+                        doom_argv[3] = nullptr;
+                        launch_user_app("/programs/doom/doom.base.elf", 3, doom_argv);
+                        break;
+                    }
+                    case 6: {
+                        char* wl_argv[2];
+                        wl_argv[0] = (char*)"/programs/wayland/ams-wl-compositor";
+                        wl_argv[1] = nullptr;
+                        launch_user_app("/programs/wayland/ams-wl-compositor", 1, wl_argv);
+                        break;
+                    }
+                    case 7: {
+                        char* wlc_argv[2];
+                        wlc_argv[0] = (char*)"/programs/wayland/wayland-smoke-client";
+                        wlc_argv[1] = nullptr;
+                        launch_user_app("/programs/wayland/wayland-smoke-client", 1, wlc_argv);
+                        break;
+                    }
+                    case 8: {
+                        char* wegl_argv[2];
+                        wegl_argv[0] = (char*)"/programs/wayland/wayland_egl_smoke";
+                        wegl_argv[1] = nullptr;
+                        launch_user_app("/programs/wayland/wayland_egl_smoke", 1, wegl_argv);
+                        break;
+                    }
+                    case 9: start_menu_open = false; break;
                 }
                 start_menu_open = false;
             }

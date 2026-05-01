@@ -8,13 +8,16 @@
 #define STATE_ZOMBIE 3
 #define MAX_OPEN_FILES 16
 
-// Układ musi pasować do syscall_entry.s (push od dołu do góry)
+// Układ ramki stosu identyczny z tym, co buduje interrupts.s
 struct registers {
-    // Rejestry pchnięte przez nas (15 sztuk)
-    uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15;
+    // Rejestry wypychane przez SAVE_ALL
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+    uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
+
+    // Dane przerwania
     uint64_t int_no, err_code;
 
-    // Ramka CPU
+    // Ramka sprzętowa IRETQ (wypychana przez CPU lub ręcznie dla syscalli)
     uint64_t rip, cs, rflags, rsp, ss;
 } __attribute__((packed));
 
@@ -35,9 +38,14 @@ struct task {
     struct task* next;
 };
 
-extern task* current_task;
-extern "C" uint64_t schedule(registers* regs);
-void sleep(uint64_t ticks);
-task* create_task(void (*entry_point)());
-extern "C" void scheduler_add_user_task(void* entry_point, void* user_stack);
-void scheduler_init_kernel_task();
+extern "C" task* kernel_task;
+
+extern "C" {
+    extern struct task* current_task;
+    void scheduler_init_kernel_task();
+    uint64_t schedule(struct registers* regs);
+
+    void create_kernel_task(void (*entry)());
+}
+
+extern "C" void scheduler_switch_to_user(uint64_t rip, uint64_t rsp);

@@ -77,6 +77,13 @@ int fputs(const char* s, FILE* stream) {
     return 0;
 }
 
+int puts(const char* s) {
+    if (!s) return -1;
+    write(1, s, strlen(s));
+    write(1, "\n", 1);
+    return 0;
+}
+
 void print_dec(int fd, long num) {
     char buf[32];
     int i = 0;
@@ -215,6 +222,26 @@ int fclose(FILE* stream) {
     return 0;
 }
 
+int fseek(FILE *stream, long offset, int whence) {
+    if (!stream) return -1;
+    return (lseek(stream->fd, offset, whence) < 0) ? -1 : 0;
+}
+
+long ftell(FILE *stream) {
+    if (!stream) return -1;
+    return (long)lseek(stream->fd, 0, SEEK_CUR);
+}
+
+int remove(const char *pathname) {
+    return unlink(pathname);
+}
+
+int rename(const char *oldpath, const char *newpath) {
+    (void)oldpath;
+    (void)newpath;
+    return -1;
+}
+
 
 // TCC używa też fwrite
 size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
@@ -226,6 +253,58 @@ size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
 // TCC używa fprintf na stderr
 FILE* get_stderr() { return stderr; }
 FILE* get_stdout() { return stdout; }
+int putchar(int c) { return fputc(c, stdout); }
+int putc(int c, FILE* stream) { return fputc(c, stream); }
+int fflush(FILE* stream) { (void)stream; return 0; }
+int sscanf(const char *str, const char *format, ...) {
+    if (!str || !format) return 0;
+    va_list ap;
+    va_start(ap, format);
+
+    while (*str == ' ' || *str == '\t' || *str == '\n') str++;
+    while (*format == ' ') format++;
+
+    int rc = 0;
+    if (strcmp(format, "%x") == 0 || strcmp(format, "0x%x") == 0 || strcmp(format, "0X%x") == 0) {
+        unsigned int* out = va_arg(ap, unsigned int*);
+        unsigned int v = 0;
+        if (str[0] == '0' && (str[1] == 'x' || str[1] == 'X')) str += 2;
+        while ((*str >= '0' && *str <= '9') || (*str >= 'a' && *str <= 'f') || (*str >= 'A' && *str <= 'F')) {
+            unsigned int d = 0;
+            if (*str >= '0' && *str <= '9') d = (unsigned int)(*str - '0');
+            else if (*str >= 'a' && *str <= 'f') d = 10u + (unsigned int)(*str - 'a');
+            else d = 10u + (unsigned int)(*str - 'A');
+            v = (v << 4) | d;
+            str++;
+            rc = 1;
+        }
+        if (rc && out) *out = v;
+    } else if (strcmp(format, "%d") == 0 || strcmp(format, "%i") == 0) {
+        int* out = va_arg(ap, int*);
+        int neg = 0;
+        if (*str == '-') { neg = 1; str++; }
+        int v = 0;
+        while (*str >= '0' && *str <= '9') {
+            v = v * 10 + (*str - '0');
+            str++;
+            rc = 1;
+        }
+        if (rc && out) *out = neg ? -v : v;
+    } else if (strcmp(format, "%o") == 0 || strcmp(format, "0%o") == 0) {
+        unsigned int* out = va_arg(ap, unsigned int*);
+        unsigned int v = 0;
+        if (*str == '0') str++;
+        while (*str >= '0' && *str <= '7') {
+            v = (v << 3) | (unsigned int)(*str - '0');
+            str++;
+            rc = 1;
+        }
+        if (rc && out) *out = v;
+    }
+
+    va_end(ap);
+    return rc;
+}
 
 }
 

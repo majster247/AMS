@@ -8,6 +8,7 @@ extern "C" {
 int* __errno_location(void);
 #define errno (*__errno_location())
 #define EINTR 4
+#define EISDIR 21
 
 #ifdef __cplusplus
 }

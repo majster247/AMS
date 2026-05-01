@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="{{ site.lang | default: "en" }}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>
+      {% if page.title %}{{ page.title }} - {% endif %}{{ site.title }}
+    </title>
+    <link rel="stylesheet" href="{{ "/ams-docs.css" | relative_url }}" />
+    {% seo %}
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="{{ "/" | relative_url }}">
+          <span class="brand-dot"></span>
+          <span>AMS-OS Docs</span>
+        </a>
+        <nav class="topnav">
+          <a href="{{ "/" | relative_url }}">Home</a>
+          <a href="{{ "/13-getting-started.md" | relative_url }}">Getting Started</a>
+          <a href="{{ "/14-architecture-overview.md" | relative_url }}">Architecture</a>
+          <a href="{{ "/15-internals.md" | relative_url }}">Internals</a>
+          <a href="{{ "/16-operations.md" | relative_url }}">Operations</a>
+        </nav>
+        <div class="toolbar-actions">
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle theme">Dark</button>
+          <div class="search-wrap">
+            <input id="doc-search" type="search" placeholder="Search docs..." aria-label="Search docs" />
+            <div id="search-results" class="search-results" hidden></div>
+          </div>
+        </div>
+        <div class="lang-switch">
+          <a id="lang-pl" href="#">PL</a>
+          <span>/</span>
+          <a id="lang-en" href="#">EN</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <section>
+          <h3>Getting Started</h3>
+          <a href="{{ "/13-getting-started.md" | relative_url }}">Getting Started</a>
+          <a href="{{ "/01-szybki-start.md" | relative_url }}">Szybki Start</a>
+          <a href="{{ "/02-budowanie-i-uruchamianie.md" | relative_url }}">Build and Run</a>
+        </section>
+        <section>
+          <h3>Architecture</h3>
+          <a href="{{ "/14-architecture-overview.md" | relative_url }}">Architecture Overview</a>
+          <a href="{{ "/03-architektura-systemu.md" | relative_url }}">Architektura Systemu</a>
+          <a href="{{ "/04-uzytkownik-i-syscalls.md" | relative_url }}">Userspace and Syscalls</a>
+          <a href="{{ "/05-aplikacje-i-narzedzia.md" | relative_url }}">Apps and Tools</a>
+        </section>
+        <section>
+          <h3>Internals</h3>
+          <a href="{{ "/15-internals.md" | relative_url }}">Internals</a>
+          <a href="{{ "/08-sekwencja-bootowania.md" | relative_url }}">Boot Sequence</a>
+          <a href="{{ "/09-pamiec-krok-po-kroku.md" | relative_url }}">Memory</a>
+          <a href="{{ "/10-vfs-ext2-i-elf.md" | relative_url }}">VFS and ELF</a>
+          <a href="{{ "/11-przerwania-i-syscall.md" | relative_url }}">Interrupts and Syscalls</a>
+        </section>
+        <section>
+          <h3>Operations</h3>
+          <a href="{{ "/16-operations.md" | relative_url }}">Operations</a>
+          <a href="{{ "/06-debugowanie.md" | relative_url }}">Debugging</a>
+          <a href="{{ "/07-github-pages.md" | relative_url }}">GitHub Pages</a>
+        </section>
+      </aside>
+
+      <article class="content">
+        {{ content }}
+      </article>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        <span>{{ site.title }}</span>
+        <span>Professional system documentation for AMS-OS</span>
+      </div>
+    </footer>
+
+    <script>
+      (function () {
+        var pathname = window.location.pathname.replace(/\/+/g, "/");
+        var parts = pathname.split("/").filter(Boolean);
+        var enIndex = parts.indexOf("en");
+        var file = parts.length ? parts[parts.length - 1] : "index.md";
+        if (!/\.md$/.test(file)) file = "index.md";
+
+        var plToEn = {
+          "01-szybki-start.md": "01-quick-start.md",
+          "02-budowanie-i-uruchamianie.md": "02-build-and-run.md",
+          "03-architektura-systemu.md": "03-system-architecture.md",
+          "04-uzytkownik-i-syscalls.md": "04-userspace-elf-and-syscalls.md",
+          "05-aplikacje-i-narzedzia.md": "05-apps-and-tools.md",
+          "06-debugowanie.md": "06-debugging.md",
+          "08-sekwencja-bootowania.md": "08-boot-sequence-step-by-step.md",
+          "09-pamiec-krok-po-kroku.md": "09-memory-step-by-step.md",
+          "10-vfs-ext2-i-elf.md": "10-vfs-ext2-elf.md",
+          "11-przerwania-i-syscall.md": "11-interrupts-and-syscall-path.md",
+          "12-glosariusz.md": "12-glossary.md"
+        };
+        var enToPl = {};
+        Object.keys(plToEn).forEach(function (k) {
+          enToPl[plToEn[k]] = k;
+        });
+
+        var base = parts.slice(0, enIndex >= 0 ? enIndex : Math.max(parts.length - 1, 0));
+        var plFile = enIndex >= 0 ? (enToPl[file] || file) : file;
+        var enFile = enIndex >= 0 ? file : (plToEn[file] || file);
+
+        function makePath(isEn, target) {
+          var p = base.slice();
+          if (isEn) p.push("en");
+          p.push(target);
+          return "/" + p.join("/");
+        }
+
+        document.getElementById("lang-pl").setAttribute("href", makePath(false, plFile));
+        document.getElementById("lang-en").setAttribute("href", makePath(true, enFile));
+      })();
+    </script>
+    <script src="{{ "/ams-docs.js" | relative_url }}"></script>
+  </body>
+</html>

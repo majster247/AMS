@@ -39,6 +39,18 @@ extern "C" {
     void write_serial_hex(uint64_t val);
     void write_serial_char(char c);
 
+    struct multiboot_tag {
+        uint32_t type;
+        uint32_t size;
+    };
+
+    struct multiboot_tag_basic_meminfo {
+            uint32_t type;
+            uint32_t size;
+            uint32_t mem_lower;
+            uint32_t mem_upper;
+    };
+
     /** === MEMORY MANAGEMENT === */
     /** @brief Parsuje struktury Multiboot2 przekazane przez bootloader */
     void parse_multiboot(uint64_t addr);
@@ -79,9 +91,15 @@ extern "C" {
     void pmm_mark_used(uint64_t start, uint64_t size);
     void pmm_mark_free(uint64_t start, uint64_t size);
     void pmm_mark_chunk_used(uint64_t start_addr, size_t size_bytes);
-    void syscall_handler(registers* regs);
+    uint64_t syscall_handler(registers* regs);
     void scheduler_switch_to_user(uint64_t entry_point, uint64_t user_stack);
-    task* create_kernel_task();
+
+    uint32_t pmm_get_free_memory_kb();
+    bool pmm_is_free(uint64_t addr);
+    void pmm_dump_memory_map();
+
+
+    extern uint64_t total_ram_bytes;
 
     /** @brief Wymusza zmianę stosu i wywołuje funkcję */
     //extern "C" void force_stack_switch(uint64_t new_rsp, void (*func)());

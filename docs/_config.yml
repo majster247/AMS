@@ -1,0 +1,38 @@
+title: AMS-OS Documentation
+description: Profesjonalna dokumentacja techniczna systemu AMS-OS
+theme: minima
+markdown: kramdown
+lang: pl
+show_excerpts: false
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+header_pages:
+  - index.md
+  - en/index.md
+  - 13-getting-started.md
+  - 14-architecture-overview.md
+  - 15-internals.md
+  - 16-operations.md
+  - 17-contributing.md
+  - 18-release-notes.md
+  - 01-szybki-start.md
+  - 02-budowanie-i-uruchamianie.md
+  - 03-architektura-systemu.md
+  - 04-uzytkownik-i-syscalls.md
+  - 05-aplikacje-i-narzedzia.md
+  - 06-debugowanie.md
+  - 07-github-pages.md
+  - 08-sekwencja-bootowania.md
+  - 09-pamiec-krok-po-kroku.md
+  - 10-vfs-ext2-i-elf.md
+  - 11-przerwania-i-syscall.md
+  - 12-glosariusz.md

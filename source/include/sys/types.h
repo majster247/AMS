@@ -3,4 +3,5 @@
 typedef long off_t;
 typedef long ssize_t;
 typedef int pid_t;
+typedef unsigned int mode_t;
 #endif

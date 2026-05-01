@@ -1,263 +1,274 @@
 #include "vmm.h"
 #include "kernel.h"
-#include "heap.h" 
-#include "task.h"
 
-#define PAGE_PRESENT  (1ULL << 0)
-#define PAGE_WRITABLE (1ULL << 1)
-#define PAGE_USER     (1ULL << 2)
-#define PAGE_HUGE     (1ULL << 7)
 
-#define PHYSICAL_MEM_OFFSET 0xFFFF800000000000
+extern "C" bool vmm_hhdm_ready = false; // Na początku nie jest gotowe, potem ustawimy na true w kernel.cpp
 
-extern "C" {
-    // --- POPRAWKA: Usunięto 'static inline', teraz funkcja jest widoczna dla linkera ---
-    uint64_t get_cr3() { 
-        uint64_t cr3; 
-        asm volatile("mov %%cr3, %0" : "=r"(cr3)); 
-        return cr3 & ~0xFFFULL; 
+// Pomocnicza funkcja: zamienia adres fizyczny na wirtualny w "lustrze"
+inline uint64_t phys_to_virt(uint64_t phys) {
+    if (vmm_hhdm_ready) {
+        return phys + 0xFFFF800000000000ULL;
     }
+    // Jeśli nie gotowe, używamy adresu fizycznego (bo mamy Identity Map)
+    return phys; 
+}
+static uint64_t* alloc_table() {
+    uint64_t phys = (uint64_t)pmm_alloc_frame();
+    if (!phys) return nullptr;
 
-    // Te funkcje mogą zostać static, jeśli używamy ich tylko tutaj, 
-    // ale dla bezpieczeństwa też można je upublicznić (helpery VMM).
-    void set_cr3(uint64_t cr3) { 
-        asm volatile("mov %0, %%cr3" :: "r"(cr3) : "memory"); 
+    // fix_ptr sam zdecyduje, czy użyć adresu fizycznego czy wirtualnego
+    uint64_t* virt = fix_ptr(phys);
+
+    // Zerujemy tablicę
+    for (int i = 0; i < 512; i++) virt[i] = 0;
+
+    return (uint64_t*)phys; // Zawsze zwracamy fizyczny do wpisania w strukturę
+}
+
+void vmm_map_page_ex(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
+    // PML4 jest adresem fizycznym, musimy go widzieć przez lustro
+    uint64_t* pml4 = (uint64_t*)phys_to_virt(pml4_phys);
+
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    if (!(pml4[pml4_idx] & PAGE_PRESENT)) {
+        pml4[pml4_idx] = (uint64_t)alloc_table() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        memset((void*)phys_to_virt(pml4[pml4_idx] & ~0xFFFULL), 0, 4096);
     }
-    
-    void invlpg(uint64_t virt) { 
-        asm volatile("invlpg (%0)" :: "r"(virt) : "memory"); 
+    // Każdy kolejny poziom też musimy czytać przez phys_to_virt!
+    uint64_t* pdpt = (uint64_t*)phys_to_virt(pml4[pml4_idx] & ~0xFFFULL);
+
+    if (!(pdpt[pdpt_idx] & PAGE_PRESENT)) {
+        pdpt[pdpt_idx] = (uint64_t)alloc_table() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        memset((void*)phys_to_virt(pdpt[pdpt_idx] & ~0xFFFULL), 0, 4096);
     }
+    uint64_t* pd = (uint64_t*)phys_to_virt(pdpt[pdpt_idx] & ~0xFFFULL);
 
-    // Alokator tablic (4KB)
-    static uint64_t* alloc_table() {
-        void* ptr = pmm_alloc_frame();
-        if(!ptr) return nullptr;
-        uint64_t* table = (uint64_t*)ptr;
-        // Zerowanie tablicy
-        for(int i=0; i<512; i++) table[i] = 0;
-        return table;
-    }
-
-    // Pobiera następną tablicę, tworzy jeśli brak.
-    uint64_t* get_next_table(uint64_t* table, uint64_t index, uint64_t flags) {
-        if (!(table[index] & PAGE_PRESENT)) {
-            uint64_t* new_table = alloc_table();
-            if (!new_table) return nullptr;
-
-            // ✅ Upewnij się, że new_table to czysty adres!
-            uint64_t addr = (uint64_t)new_table & ~0xFFF; // Strip any flags
-
-            table[index] = addr | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
-        } else {
-            // Upewnij się, że istniejąca ścieżka też ma bit USER
-            table[index] |= PAGE_USER;
-        }
-
-        // ✅ Zwracamy czysty adres (bez flag)
-        return (uint64_t*)(table[index] & ~0xFFFULL);
-    }
-
-    // --- MAPOWANIE 4KB ---
-    void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
-        uint64_t* pml4 = (uint64_t*)get_cr3();
-        uint64_t pml4_idx = (virt >> 39) & 0x1FF;
-        uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
-        uint64_t pd_idx   = (virt >> 21) & 0x1FF;
-        uint64_t pt_idx   = (virt >> 12) & 0x1FF;
-
-        uint64_t dir_flags = flags & (PAGE_USER | PAGE_WRITABLE);
-
-        uint64_t* pdpt = get_next_table(pml4, pml4_idx, dir_flags);
-        if(!pdpt) {
-            write_serial_string("[VMM] Failed to get PDPT!\n");
-            return;
-        }
-
-        uint64_t* pd = get_next_table(pdpt, pdpt_idx, dir_flags);
-        if(!pd) {
-            write_serial_string("[VMM] Failed to get PD!\n");
-            return;
-        }
-
-        uint64_t* pt = get_next_table(pd, pd_idx, dir_flags);
-        if(!pt) {
-            write_serial_string("[VMM] Failed to get PT!\n");
-            return;
-        }
-
-        // ✅ Upewnij się, że phys NIE MA flag!
-        if (phys & 0xFFF) {
-            write_serial_string("[VMM] WARNING: Physical address has flags! phys=");
-            write_serial_hex(phys);
-            write_serial_string("\n");
-            phys &= ~0xFFF; // Clear flags
-        }
-
-        pt[pt_idx] = phys | flags | PAGE_PRESENT;
-        invlpg(virt);
-    }
-
-    // --- MAPOWANIE HUGE (2MB) ---
-    void vmm_map_huge(uint64_t virt, uint64_t phys, uint64_t flags) {
-        uint64_t* pml4 = (uint64_t*)get_cr3();
-        uint64_t pml4_idx = (virt >> 39) & 0x1FF;
-        uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
-        uint64_t pd_idx   = (virt >> 21) & 0x1FF;
-
-        uint64_t dir_flags = flags & (PAGE_USER | PAGE_WRITABLE);
-
-        uint64_t* pdpt = get_next_table(pml4, pml4_idx, dir_flags);
-        uint64_t* pd   = get_next_table(pdpt, pdpt_idx, dir_flags);
-        
-        pd[pd_idx] = phys | flags | PAGE_HUGE | PAGE_PRESENT;
-        invlpg(virt);
-    }
-
-    void vmm_map_user(uint64_t virt, uint64_t phys, bool writable) {
-        uint64_t flags = PAGE_PRESENT | PAGE_USER;
-        if (writable) flags |= PAGE_WRITABLE;
-        
-        vmm_map_page(virt, phys, flags);
-    }
-
-    void vmm_init_direct_map(uint64_t ram_size_mb) {
-        (void)ram_size_mb;
-        
-        // ✅ Zmień z 4GB na 16GB (żeby pokryć mmap_base)
-        uint64_t limit = 0x400000000ULL; // 16GB zamiast 4GB
-        uint64_t step = 0x200000;        // 2MB (huge pages)
-        
-        write_serial_string("[VMM] Start mapowania Identity (0-16GB) na Huge Pages...\n");
-        
-        for (uint64_t phys = 0; phys < limit; phys += step) {
-            // ✅ Mapuj z PAGE_USER dla Ring 3
-            vmm_map_huge(phys, phys, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
-            
-            // Kernel map (high half) bez USER
-            vmm_map_huge(phys + PHYSICAL_MEM_OFFSET, phys, PAGE_PRESENT | PAGE_WRITABLE);
-        }
-        
-        write_serial_string("[VMM] Mapowanie zakonczone. CR3 przeladowane.\n");
-    }
-
-    // Funkcja do translacji adresu wirtualnego na fizyczny
-    uint64_t vmm_get_phys(uint64_t virt) {
-        uint64_t* pml4 = (uint64_t*)get_cr3();
-        uint64_t pml4_idx = (virt >> 39) & 0x1FF;
-        uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
-        uint64_t pd_idx   = (virt >> 21) & 0x1FF;
-        uint64_t pt_idx   = (virt >> 12) & 0x1FF;
-        uint64_t offset   = virt & 0xFFF;
-
-        // Dostęp do PML4 przez kernel offset
-        uint64_t* pml4_kernel = (uint64_t*)((uint64_t)pml4 + 0xFFFF800000000000ULL);
-
-        if (!(pml4_kernel[pml4_idx] & PAGE_PRESENT)) {
-            return 0; // Strona nie zamapowana
-        }
-
-        uint64_t* pdpt = (uint64_t*)((pml4_kernel[pml4_idx] & ~0xFFFULL) + 0xFFFF800000000000ULL);
-
-        if (!(pdpt[pdpt_idx] & PAGE_PRESENT)) {
-            return 0;
-        }
-
-        // Sprawdź czy to huge page (1GB)
-        if (pdpt[pdpt_idx] & (1ULL << 7)) {
-            uint64_t page_base = pdpt[pdpt_idx] & ~0x3FFFFFFFULL;
-            return page_base + (virt & 0x3FFFFFFFULL);
-        }
-
-        uint64_t* pd = (uint64_t*)((pdpt[pdpt_idx] & ~0xFFFULL) + 0xFFFF800000000000ULL);
-
-        if (!(pd[pd_idx] & PAGE_PRESENT)) {
-            return 0;
-        }
-
-        // Sprawdź czy to huge page (2MB)
-        if (pd[pd_idx] & (1ULL << 7)) {
-            uint64_t page_base = pd[pd_idx] & ~0x1FFFFFULL;
-            return page_base + (virt & 0x1FFFFFULL);
-        }
-
-        uint64_t* pt = (uint64_t*)((pd[pd_idx] & ~0xFFFULL) + 0xFFFF800000000000ULL);
-
-        if (!(pt[pt_idx] & PAGE_PRESENT)) {
-            return 0;
-        }
-
-        uint64_t page_base = pt[pt_idx] & ~0xFFFULL;
-        return page_base + offset;
+    // TUTAJ JEST PUŁAPKA: Jeśli pd[pd_idx] ma bit PAGE_HUGE, nie możemy tam wstawić PT!
+    if (!(pd[pd_idx] & PAGE_PRESENT)) {
+        pd[pd_idx] = (uint64_t)alloc_table() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        memset((void*)phys_to_virt(pd[pd_idx] & ~0xFFFULL), 0, 4096);
+    } else if (pd[pd_idx] & PAGE_HUGE) {
+        // Jeśli tu już jest Huge Page, to vmm_map_page (4KB) musi odpuścić, 
+        // bo adres jest już zmapowany (często przy MMIO pod 4GB).
+        return; 
     }
     
-    void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
-        vmm_map_page(virt, phys, flags);
-    }
+    uint64_t* pt = (uint64_t*)phys_to_virt(pd[pd_idx] & ~0xFFFULL);
+    pt[pt_idx] = (phys & ~0xFFFULL) | flags;
+
+    asm volatile("invlpg (%0)" :: "r"(virt) : "memory");
+}
+
+void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags) {
+    vmm_map_page_ex(get_cr3(), virt, phys, flags);
+}
+
+uint64_t vmm_get_phys_ex(uint64_t pml4_phys, uint64_t virt) {
+    uint64_t* pml4 = (uint64_t*)phys_to_virt(pml4_phys);
     
-    void vmm_set_nocache(uint64_t virt) {
-        uint64_t* pml4 = (uint64_t*)get_cr3();
-        uint64_t pml4_idx = (virt >> 39) & 0x1FF;
-        uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
-        uint64_t pd_idx   = (virt >> 21) & 0x1FF;
-        
-        uint64_t* pdpt = (uint64_t*)(pml4[pml4_idx] & ~0xFFFULL);
-        uint64_t* pd   = (uint64_t*)(pdpt[pdpt_idx] & ~0xFFFULL);
-        
-        pd[pd_idx] |= (1<<4) | (1<<3);
-        invlpg(virt);
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    if (!(pml4[pml4_idx] & PAGE_PRESENT)) return 0;
+    uint64_t* pdpt = (uint64_t*)phys_to_virt(pml4[pml4_idx] & ~0xFFFULL);
+
+    if (!(pdpt[pdpt_idx] & PAGE_PRESENT)) return 0;
+    uint64_t* pd = (uint64_t*)phys_to_virt(pdpt[pdpt_idx] & ~0xFFFULL);
+
+    if (!(pd[pd_idx] & PAGE_PRESENT)) return 0;
+    if (pd[pd_idx] & PAGE_HUGE) {
+        return (pd[pd_idx] & ~0x1FFFFFULL) | (virt & 0x1FFFFFULL);
     }
+    uint64_t* pt = (uint64_t*)phys_to_virt(pd[pd_idx] & ~0xFFFULL);
 
+    if (!(pt[pt_idx] & PAGE_PRESENT)) return 0;
+    return (pt[pt_idx] & ~0xFFFULL) | (virt & 0xFFF);
+}
 
-    // Znajduje wolny obszar wirtualny i mapuje tam fizyczne ramki
-    // size - rozmiar w bajtach (musi być wyrównany do 4096)
-    // flags - np. PAGE_USER | PAGE_WRITABLE
-    uint64_t vmm_allocate_region(uint64_t size, uint64_t flags) {
-        if (!current_task) return 0;
-
-        // 1. Pobierz aktualny "wierzchołek" pamięci procesu
-        uint64_t start_addr = current_task->virt_memory_top;
-
-        // 2. Oblicz ile stron potrzebujemy
-        uint64_t pages = (size + 4095) / 4096;
-
-        // 3. Dla każdej strony:
-        for (uint64_t i = 0; i < pages; i++) {
-            uint64_t phys = (uint64_t)pmm_alloc_frame();
-            if (!phys) {
-                // OOM (Out Of Memory)! W prawdziwym OS tutaj robimy cleanup.
-                return 0; 
-            }
-
-            // Mapujemy (virt -> phys)
-            vmm_map(start_addr + (i * 4096), phys, flags | PAGE_PRESENT | PAGE_USER);
-
-            // Zerujemy pamięć (ważne dla bezpieczeństwa!)
-            memset((void*)(start_addr + (i * 4096)), 0, 4096);
-        }
-
-        // 4. Przesuwamy wierzchołek
-        current_task->virt_memory_top += pages * 4096;
-
-        return start_addr;
-    }
+// vmm_get_phys po prostu używa obecnego CR3
+uint64_t vmm_get_phys(uint64_t virt) {
+    return vmm_get_phys_ex(get_cr3(), virt);
 }
 
 
-// vmm_create_user_pml4() tworzy nową tablicę PML4 dla procesu użytkownika, kopiując wpisy z aktualnego PML4 (kernelowego) i ustawiając bit USER dla tych wpisów, które są obecne. Dzięki temu proces użytkownika ma dostęp do tych samych zasobów co kernel, ale z ograniczeniami wynikającymi z bitu USER.
+uint64_t get_cr3() {
+    uint64_t cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
+}
+
+void set_cr3(uint64_t cr3) {
+    asm volatile("mov %0, %%cr3" :: "r"(cr3));
+}
+
+
+void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags) {
+    vmm_map_page(virt, phys, flags);
+}
+
+void vmm_unmap(uint64_t virt) {
+    uint64_t* pml4 = (uint64_t*)get_cr3();
+    
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    if (!(pml4[pml4_idx] & PAGE_PRESENT)) return;
+    uint64_t* pdpt = (uint64_t*)(pml4[pml4_idx] & ~0xFFFULL);
+
+    if (!(pdpt[pdpt_idx] & PAGE_PRESENT)) return;
+    uint64_t* pd = (uint64_t*)(pdpt[pdpt_idx] & ~0xFFFULL);
+
+    if (!(pd[pd_idx] & PAGE_PRESENT)) return;
+    uint64_t* pt = (uint64_t*)(pd[pd_idx] & ~0xFFFULL);
+
+    if (!(pt[pt_idx] & PAGE_PRESENT)) return;
+    
+    pt[pt_idx] = 0; // Odznacz stronę jako nieobecną
+
+    // Odśwież TLB dla tego adresu
+    asm volatile("invlpg (%0)" :: "r"(virt) : "memory");
+}
+
+extern "C" uint8_t stack_bottom;
+extern "C" uint8_t stack_top;
+
+uint64_t vmm_create_kernel_pml4() {
+    uint64_t new_pml4 = (uint64_t)alloc_table();
+    
+    // 1. Mapujemy pierwsze 4GB (Identity i Higher Half)
+    for (uint64_t i = 0; i < 0x100000000ULL; i += 0x200000) {
+        vmm_map_huge_ex(new_pml4, i, i, PAGE_PRESENT | PAGE_WRITABLE);
+        vmm_map_huge_ex(new_pml4, PHYS_OFFSET + i, i, PAGE_PRESENT | PAGE_WRITABLE);
+    }
+
+    // 2. KLUCZOWE: Mapujemy stos jądra, jeśli jest poza pierwszymi 4GB (na wszelki wypadek)
+    // Ale ważniejsze: upewnij się, że stos, który masz w TSS (system_tss.rsp0), 
+    // jest dostępny pod adresem, który tam wpisałeś.
+
+        for (uint64_t addr = stack_bottom & ~0xFFFULL; addr < stack_top; addr += 0x200000) {
+            vmm_map_huge_ex(new_pml4, addr, addr, PAGE_PRESENT | PAGE_WRITABLE);
+            vmm_map_huge_ex(new_pml4, PHYS_OFFSET + addr, addr, PAGE_PRESENT | PAGE_WRITABLE);
+        }
+    
+    return new_pml4;
+}
+
+
 uint64_t vmm_create_user_pml4() {
-    uint64_t* new_pml4 = (uint64_t*)pmm_alloc_frame();
-    if (!new_pml4) return 0;
+    uint64_t phys_pml4 = (uint64_t)pmm_alloc_frame();
+    if (!phys_pml4) return 0;
 
-    // Pobierz aktualny PML4 (kernelowy)
-    uint64_t* current_pml4 = (uint64_t*)get_cr3();
+    uint64_t* new_pml4_virt = (uint64_t*)phys_to_virt(phys_pml4);
+    uint64_t* current_pml4_virt = (uint64_t*)phys_to_virt(get_cr3());
 
-    // Skopiuj wpisy z aktualnego PML4, ustawiając bit USER
-    for (int i = 0; i < 512; i++) {
-        if (current_pml4[i] & PAGE_PRESENT) {
-            // Ustaw bit USER dla wszystkich obecnych wpisów
-            new_pml4[i] = current_pml4[i] | PAGE_USER;
-        }
+    for (int i = 0; i < 512; i++) new_pml4_virt[i] = 0;
+
+    // Kopiujemy jądro bez bitu USER
+    for (int i = 256; i < 512; i++) {
+        new_pml4_virt[i] = current_pml4_virt[i];
     }
 
-    return (uint64_t)new_pml4;
+    // 2. NOWE: Ratujemy kod jądra! (Identity Mapping dla pierwszych 8MB)
+    // Mapujemy obszar 0x000000 do 0x800000, aby jądro przeżyło set_cr3().
+    // Używamy flag PRESENT i WRITABLE, ale BEZ flagi PAGE_USER!
+    for (uint64_t addr = 0; addr < 0x800000; addr += 4096) {
+        vmm_map_page_ex(phys_pml4, addr, addr, PAGE_PRESENT | PAGE_WRITABLE);
+    }
+    return phys_pml4;
 }
+
+void vmm_map_mmio(uint64_t virt, uint64_t phys, size_t size) {
+    size_t page_count = (size + 4095) / 4096; // Zaokrąglij w górę do liczby stron
+    for (size_t i = 0; i < page_count; i++) {
+        vmm_map_page(virt + i * 4096, phys + i * 4096, PAGE_PRESENT | PAGE_WRITABLE);
+    }
+}
+
+//VMM MAP HIGE - mapowanie dużych stron (2MB) - używane do mapowania całej pamięci fizycznej w kernelu
+
+
+void vmm_map_huge(uint64_t virt, uint64_t phys, uint64_t flags) {
+    uint64_t cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(cr3));
+    
+    // Zawsze używamy lustra do dostępu do tablic!
+    uint64_t* pml4 = (uint64_t*)phys_to_virt(cr3 & ~0xFFFULL);
+
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+
+    if (!(pml4[pml4_idx] & PAGE_PRESENT)) {
+        pml4[pml4_idx] = (uint64_t)pmm_alloc_frame() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        // Zerowanie nowej tablicy przez lustro
+        uint64_t* next_table = (uint64_t*)phys_to_virt(pml4[pml4_idx] & ~0xFFFULL);
+        for(int i=0; i<512; i++) next_table[i] = 0;
+    }
+    uint64_t* pdpt = (uint64_t*)phys_to_virt(pml4[pml4_idx] & ~0xFFFULL);
+
+    if (!(pdpt[pdpt_idx] & PAGE_PRESENT)) {
+        pdpt[pdpt_idx] = (uint64_t)pmm_alloc_frame() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        uint64_t* next_table = (uint64_t*)phys_to_virt(pdpt[pdpt_idx] & ~0xFFFULL);
+        for(int i=0; i<512; i++) next_table[i] = 0;
+    }
+    uint64_t* pd = (uint64_t*)phys_to_virt(pdpt[pdpt_idx] & ~0xFFFULL);
+
+    // MASKOWANIE ADRESU: Dla Huge Page bity 0-20 MUSZĄ być zero!
+    // Error 8 wyskakuje, jeśli spróbujesz tam wstawić "nieczysty" adres.
+    pd[pd_idx] = (phys & ~0x1FFFFFULL) | flags | PAGE_HUGE | PAGE_PRESENT;
+}
+
+// Prosty test mapowania strony i wywołania przerwania (do sprawdzenia, czy TLB jest odświeżany)
+void vmm_test() {
+    // Mapujemy stronę 0x400000 na fizyczną 0x400000
+    vmm_map_page(0x400000, 0x400000, PAGE_PRESENT | PAGE_WRITABLE);
+    
+    // Zapisujemy coś na tej stronie
+    uint64_t* ptr = (uint64_t*)0x400000;
+    *ptr = 0xDEADBEEF;
+
+    // Teraz wywołajmy przerwanie, żeby sprawdzić, czy TLB jest odświeżany
+    asm volatile("int $3"); // Breakpoint interrupt - zatrzyma się w debuggerze
+}
+
+// Ogólnie mapowanie powinno działać dynamicznie i nie powinno wymagać ręcznego odświeżania CR3, bo vmm_map_page i vmm_map_page_ex już robią invlpg.
+// Jednak ten test jest tu, żebyś mógł ręcznie sprawdzić, czy
+// 1. Strona jest poprawnie mapowana
+// 2. Dane są zapisywane i odczytywane poprawnie
+// 3. Po mapowaniu i zapisie, wywołanie przerwania (int $3) powinno działać bez błędów, co oznacza, że TLB jest odświeżany i strona jest widoczna dla CPU.
+// Jeśli wszystko jest poprawnie, po wywołaniu vmm_test() powinieneś zobaczyć, że przerwanie int $3 działa (zatrzymuje się w debuggerze) i możesz sprawdzić, że na stronie 0x400000 jest wartość 0xDEADBEEF. Jeśli przerwanie nie działa lub strona nie jest widoczna, to znaczy, że TLB nie został odświeżony i musisz sprawdzić implementację vmm_map_page i vmm_map_page_ex, czy poprawnie wykonują invlpg.
+// Dodatkowo, jeśli chcesz ręcznie sprawdzić TLB, możesz po mapowaniu strony i zapisie wartości, spróbować odczytać tę wartość bezpośrednio z adresu fizycznego (przez lustro) i zobaczyć, czy jest tam 0xDEADBEEF. Jeśli tak, to znaczy, że mapa działa, ale jeśli przerwanie int $3 nie działa, to znaczy, że TLB nie został odświeżony i CPU nadal widzi starą mapę bez tej strony.
+
+void vmm_map_huge_ex(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags) {
+    // Ta funkcja jest podobna do vmm_map_huge, ale pozwala podać własny PML4 (przydatne przy tworzeniu nowych przestrzeni adresowych)
+    uint64_t* pml4 = (uint64_t*)phys_to_virt(pml4_phys);
+
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+
+    if (!(pml4[pml4_idx] & PAGE_PRESENT)) {
+        pml4[pml4_idx] = (uint64_t)pmm_alloc_frame() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        uint64_t* next_table = (uint64_t*)phys_to_virt(pml4[pml4_idx] & ~0xFFFULL);
+        for(int i=0; i<512; i++) next_table[i] = 0;
+    }
+    uint64_t* pdpt = (uint64_t*)phys_to_virt(pml4[pml4_idx] & ~0xFFFULL);
+
+    if (!(pdpt[pdpt_idx] & PAGE_PRESENT)) {
+        pdpt[pdpt_idx] = (uint64_t)pmm_alloc_frame() | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+        uint64_t* next_table = (uint64_t*)phys_to_virt(pdpt[pdpt_idx] & ~0xFFFULL);
+        for(int i=0; i<512; i++) next_table[i] = 0;
+    }
+    uint64_t* pd = (uint64_t*)phys_to_virt(pdpt[pdpt_idx] & ~0xFFFULL);
+
+    pd[pd_idx] = (phys & ~0x1FFFFFULL) | flags | PAGE_HUGE | PAGE_PRESENT;
+}
+

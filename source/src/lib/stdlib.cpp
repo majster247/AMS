@@ -149,4 +149,41 @@ extern "C" void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const
     }
 }
 
+int system(const char *command) {
+    (void)command;
+    return -1;
+}
+
+int abs(int j) {
+    return j < 0 ? -j : j;
+}
+
+__attribute__((weak)) int atoi(const char *nptr) {
+    return (int)strtol(nptr, (char**)0, 10);
+}
+
+double atof(const char *nptr) {
+    if (!nptr) return 0.0;
+    int neg = 0;
+    if (*nptr == '-') {
+        neg = 1;
+        nptr++;
+    }
+    double v = 0.0;
+    while (*nptr >= '0' && *nptr <= '9') {
+        v = v * 10.0 + (double)(*nptr - '0');
+        nptr++;
+    }
+    if (*nptr == '.') {
+        nptr++;
+        double place = 0.1;
+        while (*nptr >= '0' && *nptr <= '9') {
+            v += (double)(*nptr - '0') * place;
+            place *= 0.1;
+            nptr++;
+        }
+    }
+    return neg ? -v : v;
+}
+
 }

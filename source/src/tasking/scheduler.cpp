@@ -1,279 +1,129 @@
 #include "task.h"
-#include "io.h"
-#include "heap.h"
-#include "kernel.h"
 #include "gdt.h"
+#include "vmm.h"
+#include "kernel.h"
+#include "heap.h"
 
-// Definicje selektorów segmentów (zgodne z GDT)
-#define USER_CS 0x33  // Zmiana z 0x23
-#define USER_SS 0x2B  // Zmiana z 0x1B
-#define KERNEL_CS 0x08
-#define KERNEL_SS 0x10
-#define RFLAGS_IF 0x202
-
-// Importujemy funkcję z vmm.cpp (rozwiązuje błąd 'not declared')
+extern "C" void* kmalloc(size_t size);
+extern "C" void k_memset(void* dest, int val, size_t len);
 extern "C" uint64_t get_cr3();
-extern "C" void jump_to_user(uint64_t entry_point, uint64_t user_stack);
-extern "C" void k_memset(void* dest, int ch, size_t count);
-extern "C" void* k_strcpy(char* dest, const char* src);
+extern "C" void jump_to_ring3(uint64_t rip, uint64_t rsp);
 
-task* current_task = nullptr;
-task* task_list = nullptr;
-task* ready_queue = nullptr; // Opcjonalnie używane
+// 🔥 KLUCZOWE: wymuszenie C-linkage (FIX LINKERA)
+extern "C" void scheduler_switch_to_user(uint64_t rip, uint64_t rsp);
 
-void sleep(uint64_t ticks) {
-    if (current_task) {
-        current_task->ticks_to_sleep = ticks;
-        current_task->state = STATE_SLEEPING;
-        asm volatile("int $0x20"); // Wymuszenie przełączenia (opcjonalne)
-    }
-}
-
-extern "C" uint64_t schedule(registers* regs) {
-    // 1. Zapisz stan obecnego zadania (To zapisze stan pętli while kernela!)
-    if (current_task) {
-        current_task->kstack_top = (uint64_t)regs;
-        if (current_task->state == STATE_RUNNING) {
-            current_task->state = STATE_READY;
-        }
-    }
-
-    // 2. Prosty Round-Robin
-    task* next = current_task ? current_task->next : task_list;
-    if (!next) next = task_list;
-
-    // Pętla szukająca żywego zadania
-    int attempts = 0;
-    while(attempts < 20) { // Zabezpieczenie
-        if (!next) next = task_list;
-        
-        // Jeśli to ZOMBIE, olej go
-        if (next->state == STATE_ZOMBIE) {
-            next = next->next;
-            attempts++;
-            continue;
-        }
-
-        // Jeśli to SLEEPING
-        if (next->state == STATE_SLEEPING) {
-             if (get_system_ticks() >= next->ticks_to_sleep) next->state = STATE_READY;
-             else {
-                 next = next->next;
-                 attempts++;
-                 continue;
-             }
-        }
-        
-        // Mamy kandydata!
-        break; 
-    }
-    
-    // Jeśli nie znaleźliśmy nikogo (np. user umarł), wracamy do Task 0 (Kernel)
-    if (!next || next->state == STATE_ZOMBIE) {
-        // Znajdź kernela
-        next = task_list;
-        while(next && next->id != 0) next = next->next;
-    }
-
-    current_task = next;
-    current_task->state = STATE_RUNNING;
-
-    if (current_task->id >= 1000) {
-        write_serial_string("[SCHEDULER] SKACZE DO RING 3! RIP: ");
-        registers* r = (registers*)current_task->kstack_top;
-        write_serial_hex(r->rip);
-        write_serial_string("\n");
-    }
-    
-    // Tutaj normalnie ładujesz TSS->rsp0 = current_task->kernel_stack
-    // Ale dla Task 0 (Kernel) kernel_stack może być 0 lub nieustawiony, 
-    // bo Kernel działa w Ring 0 i nie potrzebuje zmiany stosu przy przerwaniu.
-    // DLA USERA TRZEBA USTAWIAĆ TSS!
-
-    system_tss.rsp0 = current_task->kernel_stack;
-    cpu_data.kernel_stack = current_task->kernel_stack;
-    
-
-    //Bardzo ochydny sposób na debugowanie, ale przynajmniej widać, że scheduler działa i przełącza zadania.
-    /*
-    write_serial_string("[SCHEDULER] Przelaczam na zadanie ID: ");
-    write_serial_dec(current_task->id);
-    write_serial_string(" RIP: ");
-    registers* r = (registers*)current_task->kstack_top;
-    write_serial_hex(r->rip);
-    write_serial_string("\n");
-    write_serial_string("[SCHEDULER] Kernel Stack: ");
-    write_serial_hex(current_task->kernel_stack);
-    write_serial_string("\n");
-    */
-
-    return current_task->kstack_top;
-}
-
-task* create_task(void (*entry_point)()) {
-    task* t = (task*)kmalloc(sizeof(task));
-    write_serial_string("[SCHEDULER] Tworze zadanie KERNEL\n");
-    
-    static uint64_t next_id = 1;
-    t->id = next_id++;
-    t->state = STATE_READY;
-    t->ticks_to_sleep = 0;
-    t->next = nullptr;
-    t->cr3 = get_cr3(); // Wątki jądra dzielą przestrzeń adresową
-
-    // Alokacja stosu
-    uint64_t stack_size = 1024*1024; // 1MB
-    void* kstack_phys = pmm_alloc_blocks(256); // 256 stron = 1MB
-    uint8_t* stack_mem = (uint8_t*)kmalloc(stack_size);
-    uint64_t stack_top = (uint64_t)stack_mem + stack_size;
-    
-    t->kernel_stack = stack_top;
-
-    // Przygotowanie rejestrów na stosie
-    registers* r = (registers*)(stack_top - sizeof(registers));
-    memset(r, 0, sizeof(registers));
-
-    r->cs = KERNEL_CS;
-    r->ss = KERNEL_SS; 
-    r->rip = (uint64_t)entry_point;
-    r->rflags = RFLAGS_IF;
-    r->rsp = stack_top;
-
-    t->kstack_top = (uint64_t)r;
-
-    if (!task_list) task_list = t;
-    else {
-        task* curr = task_list;
-        while(curr->next) curr = curr->next;
-        curr->next = t;
-    }
-    return t;
-}
-
-void scheduler_add_user_task(void* entry_point, void* user_stack) {
-    asm volatile("cli");
-
-    task* t = (task*)kmalloc(sizeof(task));
-    memset(t, 0, sizeof(task));
-    
-    write_serial_string("[SCHEDULER] Tworze zadanie USER (Ring 3)\n");
-
-    t->id = 1000; // lub next_id++
-    t->state = STATE_READY;
-    t->cr3 = get_cr3(); 
-
-    // 1. Alokacja stosu jądra
-    uint64_t kstack_size = 1024*1024; // 1MB stosu jądra dla każdego procesu z uwagi na tcc
-    void* kstack_phys = pmm_alloc_blocks(256); // Alokujesz 1MB fizycznie...
-    uint8_t* kstack_mem = (uint8_t*)kmalloc(kstack_size); // ...i 1MB wirtualnie na stercie
-    uint64_t kstack_top = (uint64_t)kstack_mem + kstack_size;
-    t->kernel_stack = kstack_top;
-
-    // 2. Przygotowanie struktury registers na stosie jądra
-    // Musimy upewnić się, że struktura jest na samym szczycie
-    registers* r = (registers*)(kstack_top - sizeof(registers));
-    memset(r, 0, sizeof(registers));
-
-    // Symulujemy stan, jakby procesor właśnie skończył obsługę przerwania
-    r->ss = USER_SS;            // Selector 0x1B
-    r->rsp = (uint64_t)user_stack; 
-    r->rflags = 0x202;          // Interrupts enabled
-    r->cs = USER_CS;            // Selector 0x23
-    r->rip = (uint64_t)entry_point;
-
-    // WAŻNE: Musisz ustawić rejestry segmentowe w strukturze, 
-    // jeśli Twój kod ASM je przywraca (pop rax, pop rbx itd.)
-    r->rax = 0;
-    r->rbx = 0;
-    r->rcx = 0; // Jeśli używasz rcx do przekazywania argumentów
-    r->rdx = 0;
-    r->rsi = 0;
-    r->rdi = 0;
-    r->rbp = 0;
-    r->r8 = 0;
-    r->r9 = 0;
-    r->r10 = 0;
-    r->r11 = 0;
-    r->r12 = 0;
-    r->r13 = 0;
-    r->r14 = 0;
-    r->r15 = 0;
-    t->kstack_top = (uint64_t)r;
-
-    // 3. Dodawanie do listy
-    if (!task_list) task_list = t;
-    else {
-        task* curr = task_list;
-        while(curr->next) curr = curr->next;
-        curr->next = t;
-    }
-
+extern "C" void kernel_task_wrapper(void (*entry)()) {
     asm volatile("sti");
+
+    if (entry)
+        entry();
+
+    write_serial_string("\n[SCHED] Kernel task ended\n");
+
+    while (1) asm volatile("cli; hlt");
 }
 
-void scheduler_init_kernel_task() {
-    task* t = (task*)kmalloc(sizeof(task));
-    memset(t, 0, sizeof(task));
-    
-    t->id = 0;
-    t->state = STATE_RUNNING;
-    t->next = nullptr;
-    t->cr3 = get_cr3();
+extern "C" {
+    task* current_task = nullptr;
+    task* task_list[64];
+    int task_count = 0;
+    int current_task_index = 0;
+    static uint64_t g_next_task_id = 1;
 
-    // 16KB stosu
-    uint64_t kstack_size = 16384;
-    void* kstack_mem = kmalloc(kstack_size);
-    t->kernel_stack = (uint64_t)kstack_mem + kstack_size;
-    
-    // STARTUJEMY Z CZYSTEGO STOSU (BEZ OFFSETU!)
-    t->kstack_top = t->kernel_stack; 
+    uint64_t schedule(registers* regs) {
+        if (task_count <= 1)
+            return (uint64_t)regs;
 
-    // TSS musi wskazywać na ten sam stos
-    system_tss.rsp0 = t->kernel_stack; 
+        // zapisz kontekst
+        if (current_task)
+            current_task->rsp = (uint64_t)regs;
 
-    if (!task_list) task_list = t;
-    else {
-        t->next = task_list;
-        task_list = t;
+        // round robin
+        current_task_index = (current_task_index + 1) % task_count;
+        task* next = task_list[current_task_index];
+
+        current_task = next;
+
+        // kernel stack dla ring0
+        system_tss.rsp0 = next->kstack_top;
+        cpu_data.kernel_stack = next->kstack_top;
+
+        // CR3 switch (process isolation)
+        uint64_t cr3;
+        asm volatile("mov %%cr3, %0" : "=r"(cr3));
+
+        if (next->cr3 != cr3) {
+            asm volatile("mov %0, %%cr3" :: "r"(next->cr3) : "memory");
+        }
+
+        return current_task->rsp;
     }
-    
-    current_task = t;
-    write_serial_string("[SCHEDULER] Kernel registered with CLEAN STACK at: ");
-    write_serial_hex(t->kernel_stack);
-    write_serial_string("\n");
-}
 
-void scheduler_switch_to_user(uint64_t entry, uint64_t user_rsp) {
-    write_serial_string("[SCHEDULER] Switching to user mode at entry: ");
-    write_serial_hex(entry);
-    write_serial_string(" with user stack: ");
-    write_serial_hex(user_rsp);
-    write_serial_string("\n");
+    void scheduler_init_kernel_task() {
+        task* t = (task*)kmalloc(sizeof(task));
+        k_memset(t, 0, sizeof(task));
 
-    // ✅ To powinno działać, ale sprawdźmy assembly
-    jump_to_user(entry, user_rsp);
-}
+        uint64_t rsp;
+        uint64_t cr3;
+
+        asm volatile("mov %%rsp, %0" : "=r"(rsp));
+        asm volatile("mov %%cr3, %0" : "=r"(cr3));
+
+        t->rsp = rsp;
+        t->kstack_top = rsp;
+        t->cr3 = cr3;
+        t->id = g_next_task_id++;
+
+        task_list[0] = t;
+        task_count = 1;
+        current_task_index = 0;
+        current_task = t;
+        cpu_data.kernel_stack = t->kstack_top;
+
+        kernel_task = t;
+
+        write_serial_string("[SCHED] Kernel task initialized\n");
+    }
+
+    void create_task(const char* name, uint64_t entry, uint64_t user_stack) {
+        task* t = (task*)kmalloc(sizeof(task));
+        k_memset(t, 0, sizeof(task));
+
+        uint64_t kstack = (uint64_t)kmalloc(0x4000) + 0x4000;
+        t->kstack_top = kstack;
+
+        uint64_t* stack = (uint64_t*)kstack;
+
+        *(--stack) = 0x2B;          // SS
+        *(--stack) = user_stack;    // RSP
+        *(--stack) = 0x202;         // RFLAGS
+        *(--stack) = 0x33;          // CS
+        *(--stack) = entry;        // RIP
+
+        *(--stack) = 0; // dummy regs...
+
+        for (int i = 0; i < 15; i++)
+            *(--stack) = 0;
+
+        t->rsp = (uint64_t)stack;
+
+        uint64_t cr3;
+        asm volatile("mov %%cr3, %0" : "=r"(cr3));
+        t->cr3 = cr3;
+        t->id = g_next_task_id++;
+
+        task_list[task_count++] = t;
+    }
+
+} // extern "C"
 
 
-task* create_kernel_task() {
-    task* t = (task*)kmalloc(sizeof(task));
-    if (!t) return nullptr;
-    
-    k_memset(t, 0, sizeof(task));
-    
-    // Zapisz obecny stan kernela
-    asm volatile("mov %%rsp, %0" : "=r"(t->rsp));
-    
-    // CR3 kernela
-    t->cr3 = get_cr3();
-    
-    // Kernel stack (alokuj nowy dla bezpieczeństwa)
-    t->kstack_top = (uint64_t)kmalloc(8192) + 8192;
-    
-    // RIP będzie ustawiony później w kmain
-    t->rip = 0;
-    
-    k_strcpy(t->name, "kernel");
-    
-    return t;
+// ================================
+// USER MODE SWITCH WRAPPER FIX
+// ================================
+
+// 🔥 TO BYŁO BRAKUJĄCE W LINKERZE
+extern "C" void scheduler_switch_to_user(uint64_t rip, uint64_t rsp) {
+    jump_to_ring3(rip, rsp);
+    __builtin_unreachable();
 }

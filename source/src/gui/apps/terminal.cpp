@@ -12,6 +12,16 @@ bool str_starts(const char* str, const char* prefix) {
     return true;
 }
 
+static bool str_ends_with(const char* s, const char* suffix) {
+    int ls = strlen(s);
+    int lf = strlen(suffix);
+    if (lf > ls) return false;
+    for (int i = 0; i < lf; ++i) {
+        if (s[ls - lf + i] != suffix[i]) return false;
+    }
+    return true;
+}
+
 TerminalWindow::TerminalWindow(int x, int y) : Window(x, y, 640, 420, "Terminal") {
     Clear();
     cmd_idx = 0;
@@ -101,7 +111,7 @@ void TerminalWindow::ExecuteCommand() {
 
     // 2. Obsługa komend wbudowanych
     if (strcmp(cmd, "help") == 0) {
-        WriteString("Commands: ls, cat, clear, reboot, [path_to_program]\n");
+        WriteString("Commands: ls, cat, clear, reboot, runlinux <bin> [args], bash, gcc, [path_to_program]\n");
     }
     else if (strcmp(cmd, "clear") == 0) {
         Clear(); cursor_row = -1;
@@ -126,7 +136,55 @@ void TerminalWindow::ExecuteCommand() {
         // Twoja implementacja CAT (użyj zmiennej 'argv[1]' jako nazwy pliku)
         // ... (tutaj wklej swoją logikę cat, ale użyj zmiennej argv[1] zamiast hardcodowanej nazwy)
     }
-    // 3. PRÓBA URUCHOMIENIA PROGRAMU (np. /tcc)
+    else if (strcmp(cmd, "bash") == 0) {
+        char* bargv[3];
+        bargv[0] = (char*)"/tools/system/bash";
+        bargv[1] = (argc > 1) ? argv[1] : nullptr;
+        bargv[2] = nullptr;
+        int ret = sys_exec("/tools/system/bash", (argc > 1) ? 2 : 1, bargv);
+        if (ret == -1) WriteString("bash: exec failed.\n");
+    }
+    else if (strcmp(cmd, "gcc") == 0) {
+        int pass_argc = argc;
+        if (pass_argc < 2) {
+            static char* default_argv[3];
+            default_argv[0] = (char*)"gcc";
+            default_argv[1] = (char*)"--version";
+            default_argv[2] = nullptr;
+            int ret = sys_exec("/tools/compiler/gcc", 2, default_argv);
+            if (ret == -1) WriteString("gcc: exec failed.\n");
+        } else {
+            int ret = sys_exec("/tools/compiler/gcc", pass_argc, argv);
+            if (ret == -1) WriteString("gcc: exec failed.\n");
+        }
+    }
+    else if (strcmp(cmd, "runlinux") == 0) {
+        if (argc < 2) {
+            WriteString("Usage: runlinux <binary> [args...]\n");
+            return;
+        }
+        char* target = argv[1];
+        int ret = sys_exec(target, argc - 1, &argv[1]);
+        if (ret == -1) {
+            // Auto-compat fallback: if user passed C source, try to run via in-guest TCC.
+            if (str_ends_with(target, ".c")) {
+                char* tcc_argv[6];
+                tcc_argv[0] = (char*)"/tools/compiler/tcc";
+                tcc_argv[1] = (char*)"-run";
+                tcc_argv[2] = (char*)"-nostdlib";
+                tcc_argv[3] = target;
+                tcc_argv[4] = nullptr;
+                int tr = sys_exec("/tools/compiler/tcc", 4, tcc_argv);
+                if (tr == -1) WriteString("runlinux: fallback tcc -run failed.\n");
+                else WriteString("runlinux: fallback tcc -run finished.\n");
+            } else {
+                WriteString("runlinux: binary not found or exec failed.\n");
+            }
+        } else {
+            WriteString("runlinux: process finished.\n");
+        }
+    }
+    // 3. PRÓBA URUCHOMIENIA PROGRAMU (np. /tools/compiler/tcc)
     else {
         // Sprawdzamy czy to plik (zaczyna się od / lub ma nazwę)
         // Musisz mieć zaimplementowany syscall sys_exec w jądrze!

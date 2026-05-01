@@ -19,6 +19,8 @@ void* sbrk(intptr_t increment);
 
 int atoi(const char *nptr);
 char *getenv(const char *name);
+int system(const char *command);
+double atof(const char *nptr);
 
 extern char **environ;
 

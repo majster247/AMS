@@ -58,9 +58,11 @@ int sprintf(char *str, const char *format, ...);
 int snprintf(char *str, size_t size, const char *format, ...);
 int vfprintf(FILE *stream, const char *format, va_list ap);
 int vsnprintf(char *str, size_t size, const char *format, va_list ap);
+int sscanf(const char *str, const char *format, ...);
 
 int fputc(int c, FILE *stream);
 int fputs(const char *s, FILE *stream);
+int puts(const char *s);
 int putc(int c, FILE *stream);
 int putchar(int c);
 int fgetc(FILE *stream);

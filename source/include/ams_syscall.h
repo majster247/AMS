@@ -16,6 +16,14 @@ void exit_program(int code);
 int get_key();
 void draw_rect(int x, int y, int w, int h, int color);
 void refresh_screen();
+// AMS custom: skopiuj bufor RGBA user-space do framebuffera
+#define SYS_AMS_FB_BLIT 450
+// AMS custom: pobierz jeden klawisz z kolejki (0 = brak)
+#define SYS_AMS_GET_KEY 451
+// AMS custom: pobierz aktualną rozdzielczość framebuffera (w,h)
+#define SYS_AMS_GET_FB_INFO 452
+// AMS custom: pobierz zdarzenie myszy (0 = brak)
+#define SYS_AMS_GET_MOUSE_EVENT 453
 
 // Dodajmy też mmap, bo TCC go szuka w syscallach
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset);

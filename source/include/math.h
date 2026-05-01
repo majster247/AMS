@@ -9,6 +9,8 @@ extern "C" {
 double strtod(const char* nptr, char** endptr);
 float strtof(const char* nptr, char** endptr);
 long double strtold(const char* nptr, char** endptr);
+double fabs(double x);
+float fabsf(float x);
 
 #define HUGE_VAL (__builtin_huge_val())
 #define NAN      (__builtin_nan(""))

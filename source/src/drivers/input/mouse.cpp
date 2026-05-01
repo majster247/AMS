@@ -32,9 +32,23 @@ static int discard_packets = 10;
 // Akumulatory resztek (żeby nie gubić precyzji przy dzieleniu)
 static int32_t mouse_acc_x = 0;
 static int32_t mouse_acc_y = 0;
+static uint64_t mouse_event_queue[256];
+static int mouse_ev_head = 0;
+static int mouse_ev_tail = 0;
 
 // Bufor tła
 uint32_t mouse_back_buffer[16 * 16];
+
+static void enqueue_mouse_event(uint8_t buttons, uint8_t flags) {
+    int next = (mouse_ev_head + 1) % 256;
+    if (next == mouse_ev_tail) return;
+
+    uint64_t x = (uint64_t)((uint16_t)(mouse_x & 0xFFFF));
+    uint64_t y = (uint64_t)((uint16_t)(mouse_y & 0xFFFF));
+    uint64_t ev = x | (y << 16) | ((uint64_t)buttons << 32) | ((uint64_t)flags << 40);
+    mouse_event_queue[mouse_ev_head] = ev;
+    mouse_ev_head = next;
+}
 
 // Helpery
 void mouse_wait(uint8_t type) {
@@ -88,6 +102,8 @@ void mouse_init() {
     discard_packets = 10;
     mouse_acc_x = 0;
     mouse_acc_y = 0;
+    mouse_ev_head = 0;
+    mouse_ev_tail = 0;
 
     write_serial_string("[MOUSE] Zinicjalizowana.\n");
 }
@@ -141,10 +157,9 @@ extern "C" void mouse_handler(struct regs *r) {
             mouse_acc_y %= MOUSE_SCALE;
 
             // === APLIKOWANIE RUCHU ===
-            // X: -= (Standard)
-            // Y: += (PS/2 jest odwrócone względem ekranu)
-            mouse_x -= move_x; 
-            mouse_y += move_y; 
+            // Użytkownik chce osie odwrotnie względem obecnego zachowania.
+            mouse_x += move_x;
+            mouse_y -= move_y;
 
             // Clamp
             extern uint32_t fb_width;
@@ -165,9 +180,23 @@ extern "C" void mouse_handler(struct regs *r) {
                 mouse_left_pressed = left;
                 mouse_right_pressed = right;
                 mouse_moved = true; 
+                uint8_t buttons = 0;
+                if (left) buttons |= 0x1;
+                if (right) buttons |= 0x2;
+                uint8_t flags = 0;
+                if (move_x != 0 || move_y != 0) flags |= 0x1;
+                if (left || right) flags |= 0x2;
+                enqueue_mouse_event(buttons, flags);
             }
             break;
     }
+}
+
+extern "C" uint64_t sys_get_mouse_event() {
+    if (mouse_ev_head == mouse_ev_tail) return 0;
+    uint64_t ev = mouse_event_queue[mouse_ev_tail];
+    mouse_ev_tail = (mouse_ev_tail + 1) % 256;
+    return ev;
 }
 
 // === RYSOWANIE KURSORA ===

@@ -1,5 +1,6 @@
 // src/lib/string.cpp
 #include "string.h"
+#include "strings.h"
 #include "stdlib.h" // Potrzebne dla malloc w strdup
 
 extern "C" {
@@ -119,6 +120,43 @@ char* strstr(const char* haystack, const char* needle) {
 
 char* strerror(int errnum) {
     return (char*)"Unknown error";
+}
+
+int bcmp(const void* s1, const void* s2, size_t n) {
+    return memcmp(s1, s2, n);
+}
+
+void bzero(void* s, size_t n) {
+    memset(s, 0, n);
+}
+
+static int lower_ascii(int c) {
+    if (c >= 'A' && c <= 'Z') return c + 32;
+    return c;
+}
+
+int strcasecmp(const char* s1, const char* s2) {
+    while (*s1 && *s2) {
+        int a = lower_ascii((unsigned char)*s1);
+        int b = lower_ascii((unsigned char)*s2);
+        if (a != b) return a - b;
+        ++s1;
+        ++s2;
+    }
+    return lower_ascii((unsigned char)*s1) - lower_ascii((unsigned char)*s2);
+}
+
+int strncasecmp(const char* s1, const char* s2, size_t n) {
+    while (n && *s1 && *s2) {
+        int a = lower_ascii((unsigned char)*s1);
+        int b = lower_ascii((unsigned char)*s2);
+        if (a != b) return a - b;
+        ++s1;
+        ++s2;
+        --n;
+    }
+    if (!n) return 0;
+    return lower_ascii((unsigned char)*s1) - lower_ascii((unsigned char)*s2);
 }
 
 // Te funkcje systemowe zazwyczaj są w unistd/stdlib, ale TCC czasem szuka ich "gdziebądź".

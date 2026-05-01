@@ -1,0 +1,25 @@
+# AMS build artifacts
+source/build/
+source/*.elf
+source/*.iso
+source/*.img
+source/iso/boot/*.elf
+source/iso/boot/*.tar
+source/kernel.elf
+source/initrd.tar
+source/qemu.log
+source/hello2.txt
+
+# Local mounts and temp output
+source/temp_mount/
+source/build/tests/
+
+# Large local payloads / staged externals
+source/external/
+source/freedoom-0.13.0/
+source/freedoom.zip
+source/freedoom1.wad
+
+# Tooling noise
+.DS_Store
+Thumbs.db

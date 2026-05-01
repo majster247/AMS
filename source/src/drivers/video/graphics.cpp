@@ -67,16 +67,20 @@ void graphics_put_pixel(int x, int y, uint32_t color) {
 }
 
 void graphics_flip() {
+    uint8_t* fb_ptr = (uint8_t*)(fb.address >= 0xFFFF800000000000ULL
+        ? fb.address
+        : (fb.address + 0xFFFF800000000000ULL));
+
     // Sprawdzamy, czy bufor jest ciągły w pamięci (bez przerw na końcach linii)
     // Pitch to długość linii w bajtach.
     if (fb.pitch == fb.width * 4) {
         // FAST PATH: Kopiujemy 3.6 MB jednym strzałem
-        fast_memcpy64((void*)fb.address, backbuffer, (fb.width * fb.height * 4) / 8);
+        fast_memcpy64((void*)fb_ptr, backbuffer, (fb.width * fb.height * 4) / 8);
     } else {
         // SLOW PATH: Kopiowanie linia po linii (jeśli karta graficzna ma padding)
         for (uint32_t y = 0; y < fb.height; y++) {
             fast_memcpy64(
-                (void*)((uint8_t*)fb.address + y * fb.pitch), // Cel z uwzględnieniem pitch
+                (void*)(fb_ptr + y * fb.pitch),               // Cel z uwzględnieniem pitch
                 backbuffer + y * fb.width,                    // Źródło (ciągłe)
                 (fb.width * 4) / 8                            // Ilość 64-bitowych słów w linii
             );

@@ -48,6 +48,10 @@ int unlink(const char* pathname) {
     return 0; 
 }
 
+int get_key() {
+    return (int)ams_syscall(SYS_AMS_GET_KEY, 0, 0, 0, 0, 0);
+}
+
 // Mmap na razie symulujemy malloc'iem (dla user space to bez różnicy na tym etapie)
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) {
     // 9 = SYS_MMAP (zgodnie z Linuxem)
