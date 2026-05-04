@@ -649,6 +649,8 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     }
 
     graphics_init_double_buffer();
+    extern "C" void ams_drm_init(int fb_w, int fb_h);
+    ams_drm_init(1280, 720);
     main_desktop = new Desktop();
     main_desktop->Init();
     main_desktop->AddWindow(new TerminalWindow(100, 100));

@@ -58,7 +58,158 @@ LIBC_OBJS := build/lib/crt0.o \
 # =============================================================================
 # CELE
 # =============================================================================
-all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf $(ISO_IMAGE) $(DISK_IMAGE)
+all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf linux_stack $(ISO_IMAGE) $(DISK_IMAGE)
+
+# =============================================================================
+# Linux-stack foundations (pixman/cairo/libinput/libffi/wayland-server-ams/
+# wlroots port skeleton, posix shm, software EGL, mlibc sysdeps, DRM/KMS/GEM
+# kernel skeleton). See docs/19-plan-pelnego-stosu-graficznego.md.
+# =============================================================================
+
+linux_stack: \
+    build/lib/libpixman-ams.a \
+    build/lib/libcairo-ams.a \
+    build/lib/libinput-ams.a \
+    build/lib/libffi-ams.a \
+    build/lib/libwayland-server-ams.a \
+    build/lib/libwlroots-ams.a \
+    build/lib/libposix-ams.a \
+    build/lib/libegl-soft-ams.a \
+    build/host/wayland-scanner \
+    build/pixman_smoke.elf \
+    build/cairo_smoke.elf \
+    build/libinput_smoke.elf \
+    build/ffi_smoke.elf \
+    build/shm_smoke.elf
+
+# --- Pixman shim ---
+build/lib/pixman_ams.o: src/lib/pixman/pixman_ams.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libpixman-ams.a: build/lib/pixman_ams.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/pixman_ams.o
+
+# --- Cairo shim (depends on pixman) ---
+build/lib/cairo_ams.o: src/lib/cairo/cairo_ams.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/cairo_font.o: src/lib/cairo/cairo_font.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libcairo-ams.a: build/lib/cairo_ams.o build/lib/cairo_font.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/cairo_ams.o build/lib/cairo_font.o
+
+# --- libinput shim ---
+build/lib/libinput_ams.o: src/lib/libinput/libinput_ams.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libinput-ams.a: build/lib/libinput_ams.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/libinput_ams.o
+
+# --- libffi shim ---
+build/lib/ffi_ams.o: src/lib/libffi/ffi_ams.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libffi-ams.a: build/lib/ffi_ams.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/ffi_ams.o
+
+# --- libwayland-server-ams ---
+build/lib/wl_event_loop.o: src/lib/wayland/wl_event_loop.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+build/lib/wl_display.o: src/lib/wayland/wl_display.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libwayland-server-ams.a: build/lib/wl_event_loop.o build/lib/wl_display.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/wl_event_loop.o build/lib/wl_display.o
+
+# --- wlroots port skeleton ---
+build/lib/wlr_backend_ams.o: src/lib/wlroots/wlr_backend_ams.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libwlroots-ams.a: build/lib/wlr_backend_ams.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/wlr_backend_ams.o
+
+# --- POSIX shim (shm_open + mlibc sysdeps stub) ---
+build/lib/shm.o: src/lib/posix/shm.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+build/lib/mlibc_sysdeps.o: src/lib/posix/mlibc_sysdeps.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libposix-ams.a: build/lib/shm.o build/lib/mlibc_sysdeps.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/shm.o build/lib/mlibc_sysdeps.o
+
+# --- Software EGL backend ---
+build/lib/egl_softpipe.o: src/lib/wayland/egl_softpipe.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libegl-soft-ams.a: build/lib/egl_softpipe.o
+	@mkdir -p build/lib
+	x86_64-elf-ar rcs $@ build/lib/egl_softpipe.o
+
+# --- Host-side wayland-scanner (built with system gcc) ---
+build/host/wayland-scanner: tools/scanner/wayland-scanner.c
+	@mkdir -p build/host
+	gcc -O2 -Wall -o $@ $<
+
+# --- Smoke tests ---
+build/apps/pixman_smoke.o: src/apps/wayland/pixman_smoke.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+build/pixman_smoke.elf: build/apps/pixman_smoke.o build/lib/libpixman-ams.a $(LIBC_OBJS) src/gui/apps/user.ld
+	$(LD) $(USER_LDFLAGS) build/apps/pixman_smoke.o build/lib/libpixman-ams.a $(LIBC_OBJS) -o $@
+
+build/apps/cairo_smoke.o: src/apps/wayland/cairo_smoke.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+build/cairo_smoke.elf: build/apps/cairo_smoke.o build/lib/libcairo-ams.a build/lib/libpixman-ams.a $(LIBC_OBJS) src/gui/apps/user.ld
+	$(LD) $(USER_LDFLAGS) build/apps/cairo_smoke.o build/lib/libcairo-ams.a build/lib/libpixman-ams.a $(LIBC_OBJS) -o $@
+
+build/apps/libinput_smoke.o: src/apps/wayland/libinput_smoke.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+build/libinput_smoke.elf: build/apps/libinput_smoke.o build/lib/libinput-ams.a $(LIBC_OBJS) src/gui/apps/user.ld
+	$(LD) $(USER_LDFLAGS) build/apps/libinput_smoke.o build/lib/libinput-ams.a $(LIBC_OBJS) -o $@
+
+build/apps/ffi_smoke.o: src/apps/wayland/ffi_smoke.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+build/ffi_smoke.elf: build/apps/ffi_smoke.o build/lib/libffi-ams.a $(LIBC_OBJS) src/gui/apps/user.ld
+	$(LD) $(USER_LDFLAGS) build/apps/ffi_smoke.o build/lib/libffi-ams.a $(LIBC_OBJS) -o $@
+
+build/apps/shm_smoke.o: src/apps/wayland/shm_smoke.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+build/shm_smoke.elf: build/apps/shm_smoke.o build/lib/libposix-ams.a $(LIBC_OBJS) src/gui/apps/user.ld
+	$(LD) $(USER_LDFLAGS) build/apps/shm_smoke.o build/lib/libposix-ams.a $(LIBC_OBJS) -o $@
+
+# --- Stage helpers (clone upstream source trees) ---
+wlroots_stage:
+	@bash tools/wlroots_stage.sh
+
+mlibc_stage:
+	@bash tools/mlibc_stage.sh
+
+linux_stack_full_stage: wayland_stage wlroots_stage mlibc_stage
+	@echo "[linux-stack] all upstream sources staged in external/"
+
 
 # --- KOMPILACJA JĄDRA ---
 
