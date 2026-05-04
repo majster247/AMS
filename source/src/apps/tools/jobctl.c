@@ -37,9 +37,9 @@ int main(int argc, char** argv) {
 
     if (streq(argv[1], "test-wayland")) {
         char* wargv[2];
-        wargv[0] = (char*)"/programs/wayland/wayland_smoke";
+        wargv[0] = (char*)"/programs/wayland/ams-smoke-client";
         wargv[1] = 0;
-        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_smoke", 1, (uint64_t)wargv, 0, 0);
+        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-smoke-client", 1, (uint64_t)wargv, 0, 0);
         if (rc != 0) {
             puts1("jobctl: wayland smoke failed");
             return 2;
@@ -70,9 +70,9 @@ int main(int argc, char** argv) {
 
     if (streq(argv[1], "start-wayland")) {
         char* argv2[2];
-        argv2[0] = (char*)"/programs/wayland/ams-wl-compositor";
+        argv2[0] = (char*)"/programs/wayland/ams-compositor";
         argv2[1] = 0;
-        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-wl-compositor", 1, (uint64_t)argv2, 0, 0);
+        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-compositor", 1, (uint64_t)argv2, 0, 0);
         if (rc != 0) {
             puts1("jobctl: start-wayland failed");
             return 6;
@@ -83,9 +83,9 @@ int main(int argc, char** argv) {
 
     if (streq(argv[1], "ping-wayland")) {
         char* argv2[2];
-        argv2[0] = (char*)"/programs/wayland/wayland-smoke-client";
+        argv2[0] = (char*)"/programs/wayland/ams-smoke-client";
         argv2[1] = 0;
-        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland-smoke-client", 1, (uint64_t)argv2, 0, 0);
+        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-smoke-client", 1, (uint64_t)argv2, 0, 0);
         if (rc != 0) {
             puts1("jobctl: ping-wayland failed");
             return 7;
@@ -96,9 +96,9 @@ int main(int argc, char** argv) {
 
     if (streq(argv[1], "egl-smoke")) {
         char* argv2[2];
-        argv2[0] = (char*)"/programs/wayland/wayland_egl_smoke";
+        argv2[0] = (char*)"/programs/wayland/ams-egl-smoke";
         argv2[1] = 0;
-        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_egl_smoke", 1, (uint64_t)argv2, 0, 0);
+        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-egl-smoke", 1, (uint64_t)argv2, 0, 0);
         if (rc != 0) {
             puts1("jobctl: egl-smoke failed");
             return 10;
@@ -168,11 +168,11 @@ int main(int argc, char** argv) {
     }
 
     if (streq(argv[1], "smoke-all")) {
-        char* cmd1[2] = { (char*)"/programs/wayland/wayland_smoke", 0 };
-        char* cmd2[2] = { (char*)"/programs/wayland/wayland_egl_smoke", 0 };
+        char* cmd1[2] = { (char*)"/programs/wayland/ams-smoke-client", 0 };
+        char* cmd2[2] = { (char*)"/programs/wayland/ams-egl-smoke", 0 };
         char* cmd3[3] = { (char*)"/tools/compiler/gcc", (char*)"--version", 0 };
-        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_smoke", 1, (uint64_t)cmd1, 0, 0) != 0) return 13;
-        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_egl_smoke", 1, (uint64_t)cmd2, 0, 0) != 0) return 14;
+        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-smoke-client", 1, (uint64_t)cmd1, 0, 0) != 0) return 13;
+        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-egl-smoke", 1, (uint64_t)cmd2, 0, 0) != 0) return 14;
         if ((int)ams_syscall(10, (uint64_t)"/tools/compiler/gcc", 2, (uint64_t)cmd3, 0, 0) != 0) return 15;
         puts1("jobctl: smoke-all passed");
         return 0;

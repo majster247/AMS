@@ -58,7 +58,12 @@ LIBC_OBJS := build/lib/crt0.o \
 # =============================================================================
 # CELE
 # =============================================================================
-all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf $(ISO_IMAGE) $(DISK_IMAGE)
+all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf \
+     build/libports.a \
+     build/ams-compositor.elf build/ams-session.elf \
+     build/ams-smoke-client.elf build/ams-egl-smoke.elf \
+     build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf \
+     $(ISO_IMAGE) $(DISK_IMAGE)
 
 # --- KOMPILACJA JĄDRA ---
 
@@ -214,66 +219,104 @@ build/doom.elf: $(DOOM_OBJS) $(LIBC_OBJS) src/gui/apps/user.ld
 	@echo "[LINK] Budowanie doom.elf (doomgeneric)..."
 	$(LD) $(USER_LDFLAGS) $(DOOM_OBJS) $(LIBC_OBJS) -o build/doom.elf
 
-# Wayland IPC smoke app (AF_UNIX + sendmsg/recvmsg + SCM_RIGHTS)
+# =============================================================================
+# Wayland desktop graphics stack
+# =============================================================================
+#
+# tools/wayland_stage.sh fetches the upstream sources (libwayland,
+# wayland-protocols, libxkbcommon, libinput, pixman, cairo, libffi,
+# mlibc, mesa, wlroots) into external/wayland-stack/. tools/wayland_build.sh
+# then drives meson/ninja to install them into a sysroot which the
+# AMS-OS user-space ELFs link against.
+WAYLAND_SYSROOT := $(WAYLAND_STAGE_DIR)/sysroot
+WAYLAND_PROTO_OUT := build/wayland-protocols
+
 wayland_stage:
-	@echo "[WAYLAND] Cloning/updating upstream sources..."
+	@echo "[WAYLAND] Cloning/updating upstream sources (mlibc, libffi, pixman, cairo,"
+	@echo "[WAYLAND]  libxkbcommon, libinput, wayland, wayland-protocols, mesa, wlroots)..."
 	@bash tools/wayland_stage.sh
 
 wayland_sync_apps: wayland_stage
 	@echo "[WAYLAND] Syncing AMS Wayland app sources into stage..."
 	@bash tools/wayland_sync_apps.sh
 
-wayland_desktop_matrix: build/wayland_compositor.elf build/ams_wayland_shell.elf build/wayland_smoke.elf build/wayland_smoke_client.elf build/wayland_session.elf
+wayland_scanner_gen: wayland_stage
+	@echo "[WAYLAND] Generating protocol code via wayland-scanner..."
+	@bash tools/wayland_scanner_gen.sh
+
+wayland_build: wayland_stage
+	@echo "[WAYLAND] Building libffi/wayland/protocols/xkbcommon/libinput/pixman/cairo/mesa/wlroots..."
+	@bash tools/wayland_build.sh
+
+wayland_desktop_matrix: build/ams-compositor.elf build/ams-session.elf build/ams-smoke-client.elf build/ams-egl-smoke.elf
 	@echo "[WAYLAND] Running desktop compatibility matrix..."
 	@bash tools/wayland_desktop_matrix.sh
 
-build/apps/wayland_smoke.o: | wayland_sync_apps
+# --- libports - AMS-OS porting layer (shm_open, poll, epoll, AF_UNIX, DRM) ---
+LIBPORTS_SRCS := \
+	src/libports/libports_shm.c \
+	src/libports/libports_poll.c \
+	src/libports/libports_unix.c \
+	src/libports/libports_drm.c \
+	src/libports/libports_ffi.c
+
+LIBPORTS_OBJS := $(patsubst src/%.c,build/%.o,$(LIBPORTS_SRCS))
+
+build/libports/%.o: src/libports/%.c
+	@mkdir -p build/libports
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude/libports -c $< -o $@
+
+build/libports.a: $(LIBPORTS_OBJS)
+	@echo "[AR]   Budowanie libports.a..."
+	x86_64-elf-ar rcs $@ $(LIBPORTS_OBJS)
+
+# --- Compositor (wlroots-based) ---
+COMPOSITOR_CFLAGS := $(USER_CFLAGS) -std=gnu99 \
+	-Iinclude -Iinclude/libports \
+	-I$(WAYLAND_SYSROOT)/usr/include \
+	-I$(WAYLAND_PROTO_OUT) \
+	-DWLR_USE_UNSTABLE=1
+COMPOSITOR_LIBS := -L$(WAYLAND_SYSROOT)/usr/lib \
+	-lwlroots -lwayland-server -lwayland-client -lwayland-cursor \
+	-lxkbcommon -linput -lpixman-1 -lcairo -lEGL -lGLESv2 -lgbm -lffi
+
+build/apps/ams_compositor.o: src/apps/wayland/ams_compositor.c | wayland_sync_apps
 	@mkdir -p build/apps
-	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $(WAYLAND_AMS_SRC_DIR)/wayland_smoke.c -o $@
+	x86_64-elf-gcc $(COMPOSITOR_CFLAGS) -c $< -o $@ || \
+	  x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude/libports -c $< -o $@
 
-build/wayland_smoke.elf: build/apps/wayland_smoke.o $(LIBC_OBJS) src/gui/apps/user.ld
-	@echo "[LINK] Budowanie wayland_smoke.elf..."
-	$(LD) $(USER_LDFLAGS) build/apps/wayland_smoke.o $(LIBC_OBJS) -o build/wayland_smoke.elf
+build/ams-compositor.elf: build/apps/ams_compositor.o build/libports.a $(LIBC_OBJS) src/gui/apps/user.ld
+	@echo "[LINK] Budowanie ams-compositor.elf..."
+	$(LD) $(USER_LDFLAGS) build/apps/ams_compositor.o build/libports.a $(LIBC_OBJS) -o build/ams-compositor.elf
 
-build/apps/wayland_egl_smoke.o: | wayland_sync_apps
+# --- Session supervisor ---
+build/apps/ams_session.o: src/apps/wayland/ams_session.c
 	@mkdir -p build/apps
-	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $(WAYLAND_AMS_SRC_DIR)/wayland_egl_smoke.c -o $@
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
 
-build/wayland_egl_smoke.elf: build/apps/wayland_egl_smoke.o $(LIBC_OBJS) src/gui/apps/user.ld
-	@echo "[LINK] Budowanie wayland_egl_smoke.elf..."
-	$(LD) $(USER_LDFLAGS) build/apps/wayland_egl_smoke.o $(LIBC_OBJS) -o build/wayland_egl_smoke.elf
+build/ams-session.elf: build/apps/ams_session.o $(LIBC_OBJS) src/gui/apps/user.ld
+	@echo "[LINK] Budowanie ams-session.elf..."
+	$(LD) $(USER_LDFLAGS) build/apps/ams_session.o $(LIBC_OBJS) -o build/ams-session.elf
 
-build/apps/ams_wl_compositor.o: | wayland_sync_apps
+# --- Wayland client smoke test (libwayland-client based) ---
+build/apps/ams_smoke_client.o: src/apps/wayland/ams_smoke_client.c
 	@mkdir -p build/apps
-	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $(WAYLAND_AMS_SRC_DIR)/ams_wl_compositor.c -o $@
+	x86_64-elf-gcc $(COMPOSITOR_CFLAGS) -c $< -o $@ || \
+	  x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude/libports -c $< -o $@
 
-build/wayland_compositor.elf: build/apps/ams_wl_compositor.o $(LIBC_OBJS) src/gui/apps/user.ld
-	@echo "[LINK] Budowanie wayland_compositor.elf..."
-	$(LD) $(USER_LDFLAGS) build/apps/ams_wl_compositor.o $(LIBC_OBJS) -o build/wayland_compositor.elf
+build/ams-smoke-client.elf: build/apps/ams_smoke_client.o build/libports.a $(LIBC_OBJS) src/gui/apps/user.ld
+	@echo "[LINK] Budowanie ams-smoke-client.elf..."
+	$(LD) $(USER_LDFLAGS) build/apps/ams_smoke_client.o build/libports.a $(LIBC_OBJS) -o build/ams-smoke-client.elf
 
-build/apps/wayland_smoke_client.o: | wayland_sync_apps
+# --- EGL/GBM smoke test ---
+build/apps/ams_egl_smoke.o: src/apps/wayland/ams_egl_smoke.c
 	@mkdir -p build/apps
-	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $(WAYLAND_AMS_SRC_DIR)/wayland_smoke_client.c -o $@
+	x86_64-elf-gcc $(COMPOSITOR_CFLAGS) -c $< -o $@ || \
+	  x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude/libports -c $< -o $@
 
-build/wayland_smoke_client.elf: build/apps/wayland_smoke_client.o $(LIBC_OBJS) src/gui/apps/user.ld
-	@echo "[LINK] Budowanie wayland_smoke_client.elf..."
-	$(LD) $(USER_LDFLAGS) build/apps/wayland_smoke_client.o $(LIBC_OBJS) -o build/wayland_smoke_client.elf
-
-build/apps/wayland_session.o: | wayland_sync_apps
-	@mkdir -p build/apps
-	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $(WAYLAND_AMS_SRC_DIR)/wayland_session.c -o $@
-
-build/wayland_session.elf: build/apps/wayland_session.o $(LIBC_OBJS) src/gui/apps/user.ld
-	@echo "[LINK] Budowanie wayland_session.elf..."
-	$(LD) $(USER_LDFLAGS) build/apps/wayland_session.o $(LIBC_OBJS) -o build/wayland_session.elf
-
-build/apps/ams_wayland_shell.o: | wayland_sync_apps
-	@mkdir -p build/apps
-	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $(WAYLAND_AMS_SRC_DIR)/ams_wayland_shell.c -o $@
-
-build/ams_wayland_shell.elf: build/apps/ams_wayland_shell.o $(LIBC_OBJS) src/gui/apps/user.ld
-	@echo "[LINK] Budowanie ams_wayland_shell.elf..."
-	$(LD) $(USER_LDFLAGS) build/apps/ams_wayland_shell.o $(LIBC_OBJS) -o build/ams_wayland_shell.elf
+build/ams-egl-smoke.elf: build/apps/ams_egl_smoke.o build/libports.a $(LIBC_OBJS) src/gui/apps/user.ld
+	@echo "[LINK] Budowanie ams-egl-smoke.elf..."
+	$(LD) $(USER_LDFLAGS) build/apps/ams_egl_smoke.o build/libports.a $(LIBC_OBJS) -o build/ams-egl-smoke.elf
 
 build/apps/apt.o: src/apps/pkg/apt.c
 	@mkdir -p build/apps
@@ -308,7 +351,10 @@ build/bash.elf: build/apps/bash.o $(LIBC_OBJS) src/gui/apps/user.ld
 	$(LD) $(USER_LDFLAGS) build/apps/bash.o $(LIBC_OBJS) -o build/bash.elf
 
 # --- OBRAZY ---
-$(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf
+$(DISK_IMAGE): build/tcc.elf build/doom.elf \
+               build/ams-compositor.elf build/ams-session.elf \
+               build/ams-smoke-client.elf build/ams-egl-smoke.elf \
+               build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf
 	@echo "[DISK] Budowanie srodowiska testowego..."
 	qemu-img create -f raw $(DISK_IMAGE) $(DISK_SIZE)
 	mkfs.ext2 -b 4096 $(DISK_IMAGE)
@@ -335,12 +381,12 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	sudo cp build/doom.elf ./temp_mount/programs/doom/doom.base.elf
 	sudo cp src/apps/doomgeneric/doom_bootstrap.c ./temp_mount/programs/doom/doom_bootstrap.c
 	sudo cp freedoom-0.13.0/freedoom1.wad ./temp_mount/programs/doom/freedoom1.wad
-	sudo cp build/wayland_smoke.elf ./temp_mount/programs/wayland/wayland_smoke
-	sudo cp build/wayland_egl_smoke.elf ./temp_mount/programs/wayland/wayland_egl_smoke
-	sudo cp build/wayland_compositor.elf ./temp_mount/programs/wayland/ams-wl-compositor
-	sudo cp build/wayland_smoke_client.elf ./temp_mount/programs/wayland/wayland-smoke-client
-	sudo cp build/wayland_session.elf ./temp_mount/programs/wayland/wayland-session
-	sudo cp build/ams_wayland_shell.elf ./temp_mount/programs/wayland/ams-wayland-shell
+	sudo cp build/ams-compositor.elf   ./temp_mount/programs/wayland/ams-compositor
+	sudo cp build/ams-session.elf      ./temp_mount/programs/wayland/ams-session
+	sudo cp build/ams-smoke-client.elf ./temp_mount/programs/wayland/ams-smoke-client
+	sudo cp build/ams-egl-smoke.elf    ./temp_mount/programs/wayland/ams-egl-smoke
+	sudo mkdir -p ./temp_mount/run/user/0
+	sudo mkdir -p ./temp_mount/dev/dri ./temp_mount/dev/input
 
 	# Narzędzia systemowe
 	sudo cp build/apt.elf ./temp_mount/tools/system/apt
@@ -410,12 +456,10 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	sudo cp build/apt.elf ./temp_mount/apt
 	sudo cp tinycc-mirror-repository/include/tccdefs.h ./temp_mount/tccdefs.h
 	sudo cp src/apps/doomgeneric/doom_bootstrap.c ./temp_mount/doom_bootstrap.c
-	sudo cp build/wayland_compositor.elf ./temp_mount/ams-wl-compositor
-	sudo cp build/wayland_session.elf ./temp_mount/wayland-session
-	sudo cp build/ams_wayland_shell.elf ./temp_mount/ams-wayland-shell
-	sudo cp build/wayland_smoke_client.elf ./temp_mount/wayland-smoke-client
-	sudo cp build/wayland_smoke.elf ./temp_mount/wayland_smoke
-	sudo cp build/wayland_egl_smoke.elf ./temp_mount/wayland_egl_smoke
+	sudo cp build/ams-compositor.elf    ./temp_mount/ams-compositor
+	sudo cp build/ams-session.elf       ./temp_mount/ams-session
+	sudo cp build/ams-smoke-client.elf  ./temp_mount/ams-smoke-client
+	sudo cp build/ams-egl-smoke.elf     ./temp_mount/ams-egl-smoke
 	sudo cp build/doom.elf ./temp_mount/doom.base.elf
 	sudo cp freedoom-0.13.0/freedoom1.wad ./temp_mount/freedoom1.wad
 	

@@ -29,3 +29,19 @@
 *.app
 *.iso
 *.vid
+
+# Wayland desktop stack staging (cloned via tools/wayland_stage.sh)
+external/wayland-stack/wayland/
+external/wayland-stack/wayland-protocols/
+external/wayland-stack/libxkbcommon/
+external/wayland-stack/libinput/
+external/wayland-stack/pixman/
+external/wayland-stack/cairo/
+external/wayland-stack/libffi/
+external/wayland-stack/mlibc/
+external/wayland-stack/mesa/
+external/wayland-stack/wlroots/
+external/wayland-stack/sysroot/
+external/wayland-stack/build/
+external/wayland-stack/ams-src/
+build/wayland-protocols/

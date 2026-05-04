@@ -31,11 +31,11 @@ int main(int argc, char** argv) {
         print_line("apt: package wayland selected.");
         print_line("apt: installing wayland smoke client...");
         char* wl_argv[2];
-                wl_argv[0] = (char*)"/programs/wayland/wayland_smoke";
+        wl_argv[0] = (char*)"/programs/wayland/ams-smoke-client";
         wl_argv[1] = 0;
-                int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_smoke", 1, (uint64_t)wl_argv, 0, 0);
+        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-smoke-client", 1, (uint64_t)wl_argv, 0, 0);
         if (rc != 0) {
-            print_line("apt: install step failed (exec wayland_smoke).");
+            print_line("apt: install step failed (exec ams-smoke-client).");
             return 2;
         }
         print_line("apt: wayland installed (mvp).");
@@ -46,9 +46,9 @@ int main(int argc, char** argv) {
         print_line("apt: package mesa selected.");
         print_line("apt: mesa payload expected at /programs/wayland/mesa.");
         char* egl_argv[2];
-        egl_argv[0] = (char*)"/programs/wayland/wayland_egl_smoke";
+        egl_argv[0] = (char*)"/programs/wayland/ams-egl-smoke";
         egl_argv[1] = 0;
-        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_egl_smoke", 1, (uint64_t)egl_argv, 0, 0) != 0) {
+        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-egl-smoke", 1, (uint64_t)egl_argv, 0, 0) != 0) {
             print_line("apt: mesa verify failed (egl smoke).");
             return 4;
         }

@@ -345,23 +345,23 @@ void Desktop::Update(int mx, int my, bool left_click) {
                     }
                     case 6: {
                         char* wl_argv[2];
-                        wl_argv[0] = (char*)"/programs/wayland/ams-wl-compositor";
+                        wl_argv[0] = (char*)"/programs/wayland/ams-compositor";
                         wl_argv[1] = nullptr;
-                        launch_user_app("/programs/wayland/ams-wl-compositor", 1, wl_argv);
+                        launch_user_app("/programs/wayland/ams-compositor", 1, wl_argv);
                         break;
                     }
                     case 7: {
                         char* wlc_argv[2];
-                        wlc_argv[0] = (char*)"/programs/wayland/wayland-smoke-client";
+                        wlc_argv[0] = (char*)"/programs/wayland/ams-smoke-client";
                         wlc_argv[1] = nullptr;
-                        launch_user_app("/programs/wayland/wayland-smoke-client", 1, wlc_argv);
+                        launch_user_app("/programs/wayland/ams-smoke-client", 1, wlc_argv);
                         break;
                     }
                     case 8: {
                         char* wegl_argv[2];
-                        wegl_argv[0] = (char*)"/programs/wayland/wayland_egl_smoke";
+                        wegl_argv[0] = (char*)"/programs/wayland/ams-egl-smoke";
                         wegl_argv[1] = nullptr;
-                        launch_user_app("/programs/wayland/wayland_egl_smoke", 1, wegl_argv);
+                        launch_user_app("/programs/wayland/ams-egl-smoke", 1, wegl_argv);
                         break;
                     }
                     case 9: start_menu_open = false; break;
