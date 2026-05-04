@@ -1,5 +1,9 @@
 #pragma once
 
+/* Note: This project does not ship the mlibc project as system libc. These
+   numbers exist so user code and tools that expect the Linux x86_64 syscall
+   table can share the same numeric definitions. */
+
 #define SYS_READ         0
 #define SYS_WRITE        1
 #define SYS_OPEN         2
