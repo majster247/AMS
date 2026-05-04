@@ -39,6 +39,10 @@ int read(int fd, void* buf, int count) {
     return (int)ams_syscall(0, fd, (uint64_t)buf, count, 0, 0); 
 }
 
+int ftruncate(int fd, long length) {
+    return (int)ams_syscall(77, (uint64_t)fd, (uint64_t)length, 0, 0, 0);
+}
+
 long lseek(int fd, long offset, int whence) {
     // Dodajemy dwa zera na końcu
     return (long)ams_syscall(8, fd, (uint64_t)offset, whence, 0, 0); 

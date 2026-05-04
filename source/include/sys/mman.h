@@ -11,9 +11,22 @@
 #define MAP_ANONYMOUS 32
 #define MAP_FAILED ((void*)-1)
 
-/* Usuń extern "C" - to jest czyste C! */
+#define MFD_CLOEXEC 0x0001U
+#define MFD_ALLOW_SEALING 0x0002U
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset);
 int munmap(void* addr, size_t length);
 int mprotect(void *addr, size_t len, int prot);
+int shm_open(const char* name, int oflag, mode_t mode);
+int shm_unlink(const char* name);
+int memfd_create(const char* name, unsigned int flags);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

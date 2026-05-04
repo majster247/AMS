@@ -58,6 +58,7 @@
 #define SYS_MEMFD_CREATE 319
 #define SYS_PRLIMIT64    302
 #define SYS_GETRANDOM    318
+#define SYS_MEMFD_CREATE 319
 #define SYS_EXEC         10 // Nasz własny syscall do execve (nie mylić z SYS_MPROTECT)
 
 
