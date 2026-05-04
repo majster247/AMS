@@ -28,6 +28,9 @@ struct vfs_node {
     //tar_data będzie używane tylko dla plików z initrd, które chcemy móc modyfikować (np. do zapisu skompilowanych plików przez tcc)
     uint8_t* tar_data;
     uint32_t blocks[15]; 
+    uint8_t storage_kind;
+    uint32_t storage_pages_count;
+    uint64_t* storage_pages;
 };
 
 extern vfs_node* vfs_root;

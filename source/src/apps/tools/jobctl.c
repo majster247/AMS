@@ -70,14 +70,14 @@ int main(int argc, char** argv) {
 
     if (streq(argv[1], "start-wayland")) {
         char* argv2[2];
-        argv2[0] = (char*)"/programs/wayland/ams-wl-compositor";
+        argv2[0] = (char*)"/programs/wayland/wayland-runtime-smoke";
         argv2[1] = 0;
-        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-wl-compositor", 1, (uint64_t)argv2, 0, 0);
+        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland-runtime-smoke", 1, (uint64_t)argv2, 0, 0);
         if (rc != 0) {
             puts1("jobctl: start-wayland failed");
             return 6;
         }
-        puts1("jobctl: start-wayland finished");
+        puts1("jobctl: runtime smoke finished");
         return 0;
     }
 
@@ -169,10 +169,10 @@ int main(int argc, char** argv) {
 
     if (streq(argv[1], "smoke-all")) {
         char* cmd1[2] = { (char*)"/programs/wayland/wayland_smoke", 0 };
-        char* cmd2[2] = { (char*)"/programs/wayland/wayland_egl_smoke", 0 };
+        char* cmd2[2] = { (char*)"/programs/wayland/wayland-runtime-smoke", 0 };
         char* cmd3[3] = { (char*)"/tools/compiler/gcc", (char*)"--version", 0 };
         if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_smoke", 1, (uint64_t)cmd1, 0, 0) != 0) return 13;
-        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_egl_smoke", 1, (uint64_t)cmd2, 0, 0) != 0) return 14;
+        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland-runtime-smoke", 1, (uint64_t)cmd2, 0, 0) != 0) return 14;
         if ((int)ams_syscall(10, (uint64_t)"/tools/compiler/gcc", 2, (uint64_t)cmd3, 0, 0) != 0) return 15;
         puts1("jobctl: smoke-all passed");
         return 0;
@@ -182,7 +182,8 @@ int main(int argc, char** argv) {
         puts1("jobctl: expected in-system payload:");
         puts1("  /tools/toolchain/bin");
         puts1("  /tools/toolchain/lib");
-        puts1("  /programs/wayland/mesa");
+        puts1("  /programs/wayland/runtime");
+        puts1("  /programs/graphics-stack/mesa");
         return 0;
     }
 

@@ -12,6 +12,7 @@
 #define SYS_MPROTECT     10
 #define SYS_MUNMAP       11
 #define SYS_BRK          12
+#define SYS_UNLINK       87
 #define SYS_RT_SIGACTION 13
 #define SYS_RT_SIGPROCMASK 14
 #define SYS_IOCTL        16

@@ -29,22 +29,21 @@ int main(int argc, char** argv) {
 
     if (streq(pkg, "wayland")) {
         print_line("apt: package wayland selected.");
-        print_line("apt: installing wayland smoke client...");
+        print_line("apt: validating IPC/shm runtime smoke...");
         char* wl_argv[2];
-                wl_argv[0] = (char*)"/programs/wayland/wayland_smoke";
+        wl_argv[0] = (char*)"/programs/wayland/wayland-runtime-smoke";
         wl_argv[1] = 0;
-                int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland_smoke", 1, (uint64_t)wl_argv, 0, 0);
-        if (rc != 0) {
-            print_line("apt: install step failed (exec wayland_smoke).");
+        if ((int)ams_syscall(10, (uint64_t)"/programs/wayland/wayland-runtime-smoke", 1, (uint64_t)wl_argv, 0, 0) != 0) {
+            print_line("apt: install step failed (runtime smoke).");
             return 2;
         }
-        print_line("apt: wayland installed (mvp).");
+        print_line("apt: wayland runtime primitives installed.");
         return 0;
     }
 
     if (streq(pkg, "mesa")) {
         print_line("apt: package mesa selected.");
-        print_line("apt: mesa payload expected at /programs/wayland/mesa.");
+        print_line("apt: mesa/gbm/egl payload expected at /programs/graphics-stack/mesa.");
         char* egl_argv[2];
         egl_argv[0] = (char*)"/programs/wayland/wayland_egl_smoke";
         egl_argv[1] = 0;
@@ -52,7 +51,7 @@ int main(int argc, char** argv) {
             print_line("apt: mesa verify failed (egl smoke).");
             return 4;
         }
-        print_line("apt: mesa installed (staged artifacts).");
+        print_line("apt: mesa staging installed (host-side sources/artifacts).");
         return 0;
     }
 

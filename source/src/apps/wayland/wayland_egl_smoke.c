@@ -10,7 +10,7 @@ static void puts1(const char* s) {
 
 int main(void) {
     puts1("wayland-egl-smoke: start");
-    puts1("wayland-egl-smoke: expecting Mesa payload at /programs/wayland/mesa");
+    puts1("wayland-egl-smoke: expecting Mesa payload at /programs/graphics-stack/mesa");
     puts1("wayland-egl-smoke: software-first EGL path staged");
     puts1("wayland-egl-smoke: PASS");
     return 0;

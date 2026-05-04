@@ -22,15 +22,16 @@ static void tiny_sleep_ticks(void) {
 }
 
 int main(void) {
-    char* compositor_argv[2];
-    compositor_argv[0] = (char*)"/ams-wl-compositor";
-    compositor_argv[1] = 0;
+    char* smoke_argv[2];
+    smoke_argv[0] = (char*)"/programs/wayland/wayland-runtime-smoke";
+    smoke_argv[1] = 0;
 
-    puts1("wayland-session: starting compositor supervisor");
+    puts1("wayland-session: supervising runtime smoke");
     while (1) {
-        long rc = (long)ams_syscall(SYS_EXECVE, (uint64_t)"/ams-wl-compositor", (uint64_t)compositor_argv, 0, 0, 0);
+        long rc = (long)ams_syscall(SYS_EXECVE, (uint64_t)"/programs/wayland/wayland-runtime-smoke",
+            (uint64_t)smoke_argv, 0, 0, 0);
         (void)rc;
-        puts1("wayland-session: compositor exited, restarting");
+        puts1("wayland-session: runtime smoke exited, restarting");
         for (int i = 0; i < 250000; ++i) tiny_sleep_ticks();
     }
 }

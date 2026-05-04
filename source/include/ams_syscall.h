@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3, uint64_t p4, uint64_t p5);
+uint64_t ams_syscall6(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3, uint64_t p4, uint64_t p5, uint64_t p6);
 
 void print_char(char c);
 void print_string(const char* str);
@@ -25,9 +26,10 @@ void refresh_screen();
 // AMS custom: pobierz zdarzenie myszy (0 = brak)
 #define SYS_AMS_GET_MOUSE_EVENT 453
 
-// Dodajmy też mmap, bo TCC go szuka w syscallach
+// User-space ABI helpers used by the lightweight libc.
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset);
 int munmap(void* addr, size_t length);
+int mprotect(void* addr, size_t length, int prot);
 int sys_exec(const char* path, int argc, char** argv);
 
 #ifdef __cplusplus

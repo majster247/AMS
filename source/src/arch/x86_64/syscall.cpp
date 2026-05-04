@@ -168,6 +168,8 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t VFS_STORAGE_NONE = 0;
+static constexpr uint8_t VFS_STORAGE_PAGED = 1;
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -190,6 +192,102 @@ static int path_basename(const char* in, char* out, size_t out_sz) {
 
 static uint64_t min_u64(uint64_t a, uint64_t b) {
     return (a < b) ? a : b;
+}
+
+static uint32_t page_count_for_size(uint64_t size) {
+    return (uint32_t)((size + 4095ULL) >> 12);
+}
+
+static void node_storage_copy_from_pages(vfs_node* node, uint64_t offset, uint8_t* dst, uint64_t size) {
+    while (size && node && node->storage_pages) {
+        uint32_t page_idx = (uint32_t)(offset >> 12);
+        uint64_t page_off = offset & 0xFFFULL;
+        uint64_t chunk = min_u64(size, 0x1000ULL - page_off);
+        if (page_idx >= node->storage_pages_count || !node->storage_pages[page_idx]) break;
+        const void* src = (const void*)(node->storage_pages[page_idx] + PHYS_OFFSET + page_off);
+        k_memcpy(dst, src, chunk);
+        dst += chunk;
+        offset += chunk;
+        size -= chunk;
+    }
+}
+
+static void node_storage_copy_into_pages(vfs_node* node, uint64_t offset, const uint8_t* src, uint64_t size) {
+    while (size && node && node->storage_pages) {
+        uint32_t page_idx = (uint32_t)(offset >> 12);
+        uint64_t page_off = offset & 0xFFFULL;
+        uint64_t chunk = min_u64(size, 0x1000ULL - page_off);
+        if (page_idx >= node->storage_pages_count || !node->storage_pages[page_idx]) break;
+        void* dst = (void*)(node->storage_pages[page_idx] + PHYS_OFFSET + page_off);
+        k_memcpy(dst, src, chunk);
+        src += chunk;
+        offset += chunk;
+        size -= chunk;
+    }
+}
+
+static void node_storage_zero_range(vfs_node* node, uint64_t offset, uint64_t size) {
+    while (size && node && node->storage_pages) {
+        uint32_t page_idx = (uint32_t)(offset >> 12);
+        uint64_t page_off = offset & 0xFFFULL;
+        uint64_t chunk = min_u64(size, 0x1000ULL - page_off);
+        if (page_idx >= node->storage_pages_count || !node->storage_pages[page_idx]) break;
+        void* dst = (void*)(node->storage_pages[page_idx] + PHYS_OFFSET + page_off);
+        k_memset(dst, 0, chunk);
+        offset += chunk;
+        size -= chunk;
+    }
+}
+
+static bool ensure_node_paged_storage(vfs_node* node, uint64_t target_size) {
+    if (!node) return false;
+
+    uint32_t need_pages = page_count_for_size(target_size);
+    if (node->storage_kind == VFS_STORAGE_PAGED && need_pages <= node->storage_pages_count) {
+        if (need_pages * 4096ULL > node->max_size) node->max_size = need_pages * 4096ULL;
+        return true;
+    }
+
+    uint64_t* new_pages = nullptr;
+    if (need_pages) {
+        new_pages = (uint64_t*)kmalloc(sizeof(uint64_t) * need_pages);
+        if (!new_pages) return false;
+        k_memset(new_pages, 0, sizeof(uint64_t) * need_pages);
+    }
+
+    uint32_t old_pages = (node->storage_kind == VFS_STORAGE_PAGED && node->storage_pages) ? node->storage_pages_count : 0;
+    if (old_pages && new_pages) {
+        k_memcpy(new_pages, node->storage_pages, sizeof(uint64_t) * old_pages);
+    }
+
+    for (uint32_t i = old_pages; i < need_pages; ++i) {
+        void* phys = pmm_alloc_frame();
+        if (!phys) {
+            if (new_pages) kfree(new_pages);
+            return false;
+        }
+        new_pages[i] = (uint64_t)phys;
+        k_memset((void*)((uint64_t)phys + PHYS_OFFSET), 0, 4096);
+    }
+
+    if (node->storage_kind != VFS_STORAGE_PAGED && node->tar_data && node->size) {
+        uint64_t copy_bytes = min_u64(node->size, target_size ? target_size : node->size);
+        node->storage_pages = new_pages;
+        node->storage_pages_count = need_pages;
+        node->storage_kind = VFS_STORAGE_PAGED;
+        node_storage_copy_into_pages(node, 0, node->tar_data, copy_bytes);
+        kfree(node->tar_data);
+        node->tar_data = nullptr;
+        node->max_size = need_pages * 4096ULL;
+        return true;
+    }
+
+    if (node->storage_pages) kfree(node->storage_pages);
+    node->storage_pages = new_pages;
+    node->storage_pages_count = need_pages;
+    node->storage_kind = VFS_STORAGE_PAGED;
+    node->max_size = need_pages * 4096ULL;
+    return true;
 }
 
 static bool copy_user_path(const char* user_ptr, char* out, size_t out_sz) {
@@ -404,7 +502,6 @@ uint64_t sys_read(registers* regs) {
         return n;
     }
 
-    if (fd_kind[fd] == FD_KIND_EVENTFD) {
     if (fd_kind[fd] == FD_KIND_DEV_NULL) {
         return 0;
     }
@@ -420,6 +517,7 @@ uint64_t sys_read(registers* regs) {
         return produced;
     }
 
+    if (fd_kind[fd] == FD_KIND_EVENTFD) {
         eventfd_state* es = (eventfd_state*)fd_aux[fd];
         if (!es) return (uint64_t)-9;
         if (count < 8) return (uint64_t)-22;
@@ -431,7 +529,12 @@ uint64_t sys_read(registers* regs) {
     }
 
     size_t read_bytes = 0;
-    if (f->tar_data) {
+    if (f->storage_kind == VFS_STORAGE_PAGED && f->storage_pages) {
+        uint64_t pos = fd_pos[fd];
+        size_t available = (pos < f->size) ? (size_t)(f->size - pos) : 0;
+        read_bytes = (count < available) ? count : available;
+        node_storage_copy_from_pages(f, pos, buf, read_bytes);
+    } else if (f->tar_data) {
         uint64_t pos = fd_pos[fd];
         size_t available = (pos < f->size) ? (size_t)(f->size - pos) : 0;
         read_bytes = (count < available) ? count : available;
@@ -500,6 +603,15 @@ uint64_t sys_write(registers* regs) {
     }
 
     if (fd_kind[fd] == FD_KIND_DEV_NULL || fd_kind[fd] == FD_KIND_DEV_URANDOM) {
+        return count;
+    }
+
+    uint64_t end_off = fd_pos[fd] + count;
+    if (f->storage_kind == VFS_STORAGE_PAGED || end_off > f->max_size) {
+        if (!ensure_node_paged_storage(f, end_off)) return (uint64_t)-12;
+        node_storage_copy_into_pages(f, fd_pos[fd], buf, count);
+        fd_pos[fd] = end_off;
+        if (fd_pos[fd] > f->size) f->size = fd_pos[fd];
         return count;
     }
 
@@ -713,6 +825,20 @@ uint64_t sys_faccessat(registers* regs) {
     dbg_path("faccessat", path, path_buf);
     if (path_buf[0] == '\0') return (uint64_t)-2;
     return vfs_find(path_buf) ? 0 : (uint64_t)-2;
+}
+
+uint64_t sys_unlink(registers* regs) {
+    const char* path = (const char*)regs->rdi;
+    char path_buf[256];
+    if (!copy_user_path(path, path_buf, sizeof(path_buf))) {
+        dbg_path("unlink", path, nullptr);
+        return (uint64_t)-14;
+    }
+    dbg_path("unlink", path, path_buf);
+    vfs_node* node = vfs_find(path_buf);
+    if (!node) return (uint64_t)-2;
+    node->name[0] = '\0';
+    return 0;
 }
 
 uint64_t sys_newfstatat(registers* regs) {
@@ -1190,25 +1316,9 @@ uint64_t sys_ftruncate(registers* regs) {
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9;
     vfs_node* f = open_files[fd];
     if (f->is_directory) return (uint64_t)-21; // EISDIR
-    if (!f->tar_data) {
-        uint64_t cap = (len > 4096) ? len : 4096;
-        f->tar_data = (uint8_t*)kmalloc(cap);
-        if (!f->tar_data) return (uint64_t)-12;
-        k_memset(f->tar_data, 0, cap);
-        f->max_size = (uint32_t)cap;
-    }
-    if (len > f->max_size) {
-        uint8_t* nb = (uint8_t*)kmalloc(len);
-        if (!nb) return (uint64_t)-12;
-        k_memset(nb, 0, len);
-        if (f->size) k_memcpy(nb, f->tar_data, f->size);
-        kfree(f->tar_data);
-        f->tar_data = nb;
-        f->max_size = (uint32_t)len;
-    }
-    if (len > f->size) {
-        k_memset(f->tar_data + f->size, 0, len - f->size);
-    }
+    uint64_t old_size = f->size;
+    if (!ensure_node_paged_storage(f, len)) return (uint64_t)-12;
+    if (len > old_size) node_storage_zero_range(f, old_size, len - old_size);
     f->size = (uint32_t)len;
     if (fd_pos[fd] > len) fd_pos[fd] = len;
     return 0;
@@ -1238,13 +1348,8 @@ uint64_t sys_memfd_create(registers* regs) {
     k_strcpy(node->name, tmp);
     node->type = FS_FILE;
     node->source = FS_TAR;
-    node->max_size = 4096;
-    node->tar_data = (uint8_t*)kmalloc(node->max_size);
-    if (!node->tar_data) {
-        kfree(node);
-        return (uint64_t)-12;
-    }
-    k_memset(node->tar_data, 0, node->max_size);
+    node->max_size = 0;
+    node->storage_kind = VFS_STORAGE_PAGED;
     node->next = vfs_root;
     vfs_root = node;
 
@@ -1684,19 +1789,48 @@ uint64_t sys_wait4(registers* regs) {
 }
 
 uint64_t sys_mmap(registers* regs) {
+    uint64_t requested_addr = regs->rdi;
     uint64_t length = regs->rsi;
+    int prot = (int)regs->rdx;
+    int flags = (int)regs->r10;
+    int fd = (int)regs->r8;
+    uint64_t offset = regs->r9;
+    const int MAP_SHARED = 0x01;
+    const int MAP_ANONYMOUS = 0x20;
+    const int MAP_FIXED = 0x10;
+    (void)MAP_SHARED;
+    if (length == 0) return (uint64_t)-22;
+    if (offset & 0xFFFULL) return (uint64_t)-22;
     length = (length + 4095) & ~4095ULL;
-    
+
     static uint64_t mmap_ptr = 0x400000000; // Startujemy wysoko
-    uint64_t addr = mmap_ptr;
+    uint64_t addr = requested_addr ? (requested_addr & ~0xFFFULL) : mmap_ptr;
+    uint64_t page_flags = PAGE_PRESENT | PAGE_USER;
+    if (prot & 0x2) page_flags |= PAGE_WRITABLE;
+
+    if (!(flags & MAP_FIXED) && !requested_addr) mmap_ptr += length;
+
+    if (!(flags & MAP_ANONYMOUS) && fd >= 0) {
+        if (fd >= 100 || !open_files[fd]) return (uint64_t)-9;
+        vfs_node* node = open_files[fd];
+        if (!node || node->is_directory) return (uint64_t)-9;
+        uint64_t end = offset + length;
+        if (node->size < end) node->size = (uint32_t)end;
+        if (!ensure_node_paged_storage(node, end)) return (uint64_t)-12;
+        uint32_t start_page = (uint32_t)(offset >> 12);
+        for (uint64_t i = 0; i < length; i += 4096) {
+            uint32_t page_idx = start_page + (uint32_t)(i >> 12);
+            if (page_idx >= node->storage_pages_count || !node->storage_pages[page_idx]) return (uint64_t)-12;
+            vmm_map_page_ex(current_task->cr3, addr + i, node->storage_pages[page_idx], page_flags);
+        }
+        return addr;
+    }
 
     for (uint64_t i = 0; i < length; i += 4096) {
         void* phys = pmm_alloc_frame();
-        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7); // USER | WRITABLE | PRESENT
+        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, page_flags);
         k_memset((void*)((uint64_t)phys + 0xFFFF800000000000ULL), 0, 4096);
     }
-
-    mmap_ptr += length;
     return addr;
 }
 
@@ -1855,6 +1989,7 @@ void init_syscall_table() {
     syscall_table[SYS_WRITEV]   = sys_writev;
     syscall_table[SYS_OPENAT]   = sys_openat;
     syscall_table[SYS_ACCESS]   = sys_access;
+    syscall_table[SYS_UNLINK]   = sys_unlink;
     syscall_table[SYS_SOCKET]   = sys_socket;
     syscall_table[SYS_SHUTDOWN] = sys_shutdown;
     syscall_table[SYS_GETSOCKNAME] = sys_getsockname;
