@@ -1,0 +1,23 @@
+[binaries]
+c = 'x86_64-elf-gcc'
+cpp = 'x86_64-elf-g++'
+ar = 'x86_64-elf-ar'
+strip = 'x86_64-elf-strip'
+pkgconfig = 'pkg-config'
+
+[host_machine]
+# Meson rejects arbitrary OS names in many upstream projects. Use "none"
+# for the freestanding AMS target while keeping the binaries explicit.
+system = 'none'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+
+[built-in options]
+c_args = ['-ffreestanding', '-fno-stack-protector', '-Iinclude']
+cpp_args = ['-ffreestanding', '-fno-stack-protector', '-fno-exceptions', '-fno-rtti', '-Iinclude']
+c_link_args = ['-n']
+cpp_link_args = ['-n']

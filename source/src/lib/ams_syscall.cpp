@@ -1,4 +1,8 @@
 #include "ams_syscall.h"
+#include "linux_syscalls.h"
+#include <sys/epoll.h>
+#include <sys/poll.h>
+#include <sys/socket.h>
 #include "stdlib.h"  // Dla malloc i free
 #include "string.h"  // Dla memset
 #include <stdint.h>  // Dla uint64_t
@@ -19,12 +23,12 @@ int sys_exec(const char* path, int argc, char** argv) {
     return (int)ams_syscall(10, (uint64_t)path, (uint64_t)argc, (uint64_t)argv, 0, 0);
 }
 
-int write(int fd, const char* buf, int count) {
+ssize_t write(int fd, const void* buf, size_t count) {
     // Dodajemy dwa zera na końcu
-    return (int)ams_syscall(1, fd, (uint64_t)buf, count, 0, 0);
+    return (ssize_t)ams_syscall(1, fd, (uint64_t)buf, count, 0, 0);
 }
 
-int open(const char* path, int flags) {
+int open(const char* path, int flags, ...) {
     // Dodajemy dwa zera na końcu
     return (int)ams_syscall(2, (uint64_t)path, flags, 0, 0, 0);
 }
@@ -34,12 +38,12 @@ int close(int fd) {
     return (int)ams_syscall(3, fd, 0, 0, 0, 0);
 }
 
-int read(int fd, void* buf, int count) {
+ssize_t read(int fd, void* buf, size_t count) {
     // Dodajemy dwa zera na końcu
-    return (int)ams_syscall(0, fd, (uint64_t)buf, count, 0, 0); 
+    return (ssize_t)ams_syscall(0, fd, (uint64_t)buf, count, 0, 0);
 }
 
-long lseek(int fd, long offset, int whence) {
+off_t lseek(int fd, off_t offset, int whence) {
     // Dodajemy dwa zera na końcu
     return (long)ams_syscall(8, fd, (uint64_t)offset, whence, 0, 0); 
 }
@@ -53,15 +57,88 @@ int get_key() {
 }
 
 // Mmap na razie symulujemy malloc'iem (dla user space to bez różnicy na tym etapie)
-void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) {
+void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
     // 9 = SYS_MMAP (zgodnie z Linuxem)
-    return (void*)ams_syscall(9, (uint64_t)addr, length, prot, flags, (uint64_t)fd);
+    return (void*)ams_syscall(SYS_MMAP, (uint64_t)addr, length, prot, flags, (uint64_t)fd);
 }
 
 int munmap(void* addr, size_t length) {
-    (void)length;
-    free(addr);
+    return (int)ams_syscall(SYS_MUNMAP, (uint64_t)addr, length, 0, 0, 0);
+}
+
+int mprotect(void* addr, size_t length, int prot) {
+    return (int)ams_syscall(SYS_MPROTECT, (uint64_t)addr, length, prot, 0, 0);
+}
+
+int ftruncate(int fd, off_t length) {
+    return (int)ams_syscall(SYS_FTRUNCATE, (uint64_t)fd, (uint64_t)length, 0, 0, 0);
+}
+
+int memfd_create(const char* name, unsigned int flags) {
+    return (int)ams_syscall(SYS_MEMFD_CREATE, (uint64_t)name, flags, 0, 0, 0);
+}
+
+int shm_open(const char* name, int oflag, mode_t mode) {
+    (void)oflag;
+    (void)mode;
+    return memfd_create(name ? name : "shm", 0);
+}
+
+int shm_unlink(const char* name) {
+    (void)name;
     return 0;
+}
+
+int poll(struct pollfd* fds, unsigned long nfds, int timeout) {
+    return (int)ams_syscall(SYS_POLL, (uint64_t)fds, nfds, (uint64_t)timeout, 0, 0);
+}
+
+int ppoll(struct pollfd* fds, unsigned long nfds, const struct timespec* timeout_ts, const void* sigmask) {
+    return (int)ams_syscall(SYS_PPOLL, (uint64_t)fds, nfds, (uint64_t)timeout_ts, (uint64_t)sigmask, 0);
+}
+
+int epoll_create1(int flags) {
+    return (int)ams_syscall(SYS_EPOLL_CREATE1, (uint64_t)flags, 0, 0, 0, 0);
+}
+
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
+    return (int)ams_syscall(SYS_EPOLL_CTL, (uint64_t)epfd, (uint64_t)op, (uint64_t)fd, (uint64_t)event, 0);
+}
+
+int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout) {
+    return (int)ams_syscall(SYS_EPOLL_WAIT, (uint64_t)epfd, (uint64_t)events, (uint64_t)maxevents, (uint64_t)timeout, 0);
+}
+
+int socket(int domain, int type, int protocol) {
+    return (int)ams_syscall(SYS_SOCKET, (uint64_t)domain, (uint64_t)type, (uint64_t)protocol, 0, 0);
+}
+
+int bind(int sockfd, const struct sockaddr* addr, unsigned int addrlen) {
+    return (int)ams_syscall(SYS_BIND, (uint64_t)sockfd, (uint64_t)addr, (uint64_t)addrlen, 0, 0);
+}
+
+int listen(int sockfd, int backlog) {
+    return (int)ams_syscall(SYS_LISTEN, (uint64_t)sockfd, (uint64_t)backlog, 0, 0, 0);
+}
+
+int accept(int sockfd, struct sockaddr* addr, socklen_t* addrlen) {
+    return (int)ams_syscall(SYS_ACCEPT, (uint64_t)sockfd, (uint64_t)addr, (uint64_t)addrlen, 0, 0);
+}
+
+int accept4(int sockfd, struct sockaddr* addr, socklen_t* addrlen, int flags) {
+    return (int)ams_syscall(SYS_ACCEPT4, (uint64_t)sockfd, (uint64_t)addr, (uint64_t)addrlen, (uint64_t)flags, 0);
+}
+
+int connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+    return (int)ams_syscall(SYS_CONNECT, (uint64_t)sockfd, (uint64_t)addr, (uint64_t)addrlen, 0, 0);
+}
+
+ssize_t sendmsg(int sockfd, const struct msghdr* msg, int flags) {
+    return (ssize_t)ams_syscall(SYS_SENDMSG, (uint64_t)sockfd, (uint64_t)msg, (uint64_t)flags, 0, 0);
+}
+
+ssize_t recvmsg(int sockfd, struct msghdr* msg, int flags) {
+    return (ssize_t)ams_syscall(SYS_RECVMSG, (uint64_t)sockfd, (uint64_t)msg, (uint64_t)flags, 0, 0);
 }
 
 // Zmienne globalne dla errno (wymagane przez niektóre biblioteki C)

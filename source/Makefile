@@ -9,6 +9,7 @@ DISK_IMAGE = disk_run.img
 DISK_SIZE ?= 4G
 WAYLAND_STAGE_DIR = external/wayland-stack
 WAYLAND_AMS_SRC_DIR = $(WAYLAND_STAGE_DIR)/ams-src
+WLROOTS_STAGE_DIR = $(WAYLAND_STAGE_DIR)/wlroots
 
 # --- Flagi Jądra (Ring 0) - PANCERNE (Bez SSE, Bez RedZone) ---
 CFLAGS = -m64 -ffreestanding -O2 -Wall -Wextra -Iinclude \
@@ -219,7 +220,18 @@ wayland_stage:
 	@echo "[WAYLAND] Cloning/updating upstream sources..."
 	@bash tools/wayland_stage.sh
 
-wayland_sync_apps: wayland_stage
+wlroots_stage: wayland_stage
+	@echo "[WLROOTS] wlroots source is staged in $(WLROOTS_STAGE_DIR)"
+
+mesa_stage:
+	@echo "[MESA] Cloning/updating Mesa, libdrm, pixman, cairo, libinput and libffi..."
+	@bash tools/mesa_stage.sh
+
+wayland_port_preflight:
+	@echo "[WAYLAND] Checking AMS port prerequisites..."
+	@bash tools/wayland_port_preflight.sh
+
+wayland_sync_apps:
 	@echo "[WAYLAND] Syncing AMS Wayland app sources into stage..."
 	@bash tools/wayland_sync_apps.sh
 
@@ -388,9 +400,12 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	@if [ -d $(WAYLAND_STAGE_DIR)/wayland-protocols/.git ]; then \
 		git -C $(WAYLAND_STAGE_DIR)/wayland-protocols rev-parse --short HEAD | sudo tee ./temp_mount/programs/wayland/mesa/wayland_protocols_commit.txt >/dev/null; \
 	fi
-	@if [ -d external/mesa-stack/build-mesa-soft ]; then \
+	@if [ -d $(WLROOTS_STAGE_DIR)/.git ]; then \
+		git -C $(WLROOTS_STAGE_DIR) rev-parse --short HEAD | sudo tee ./temp_mount/programs/wayland/mesa/wlroots_commit.txt >/dev/null; \
+	fi
+	@if [ -d external/mesa-stack/build-mesa-ams ]; then \
 		echo "[DISK] Copying Mesa software build artifacts..."; \
-		sudo cp -a external/mesa-stack/build-mesa-soft/. ./temp_mount/programs/wayland/mesa/; \
+		sudo cp -a external/mesa-stack/build-mesa-ams/. ./temp_mount/programs/wayland/mesa/; \
 	else \
 		echo "mesa local build artifacts missing (meson/ninja not available during stage)" | sudo tee ./temp_mount/programs/wayland/mesa/status.txt >/dev/null; \
 	fi
