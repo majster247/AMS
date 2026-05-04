@@ -48,6 +48,7 @@
 #define SYS_GETDENTS64   217
 #define SYS_CLOCK_GETTIME 228
 #define SYS_ARCH_PRCTL   158 // Kluczowe dla mlibc (ustawianie FS/GS)
+#define SYS_UNLINK       87
 #define SYS_OPENAT       257
 #define SYS_NEWFSTATAT   262
 #define SYS_FACCESSAT    269
