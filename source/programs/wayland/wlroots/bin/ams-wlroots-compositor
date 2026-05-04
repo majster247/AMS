@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "ams-wlroots-compositor: staged placeholder (wlroots runtime pending kernel DRM/KMS+GEM/TTM)"
+exit 0

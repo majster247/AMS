@@ -27,6 +27,8 @@ check_bin "build/ams_wayland_shell.elf" || status=1
 check_bin "build/wayland_smoke.elf" || status=1
 check_bin "build/wayland_smoke_client.elf" || status=1
 check_bin "build/wayland_session.elf" || status=1
+check_bin "external/wayland-stack/wlroots-port/README.md" || status=1
+check_bin "external/mesa-stack/mesa/.git/HEAD" || status=1
 
 echo >> "${OUT_FILE}"
 if [[ ${status} -eq 0 ]]; then

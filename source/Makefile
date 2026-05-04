@@ -9,6 +9,7 @@ DISK_IMAGE = disk_run.img
 DISK_SIZE ?= 4G
 WAYLAND_STAGE_DIR = external/wayland-stack
 WAYLAND_AMS_SRC_DIR = $(WAYLAND_STAGE_DIR)/ams-src
+GRAPHICS_STACK_STAGE_DIR = external/graphics-stack
 
 # --- Flagi Jądra (Ring 0) - PANCERNE (Bez SSE, Bez RedZone) ---
 CFLAGS = -m64 -ffreestanding -O2 -Wall -Wextra -Iinclude \
@@ -219,7 +220,11 @@ wayland_stage:
 	@echo "[WAYLAND] Cloning/updating upstream sources..."
 	@bash tools/wayland_stage.sh
 
-wayland_sync_apps: wayland_stage
+graphics_stack_stage:
+	@echo "[GRAPHICS] Staging full graphics stack (mlibc/libffi/wlroots/Mesa)..."
+	@bash tools/graphics_stack_stage.sh
+
+wayland_sync_apps: wayland_stage graphics_stack_stage
 	@echo "[WAYLAND] Syncing AMS Wayland app sources into stage..."
 	@bash tools/wayland_sync_apps.sh
 
