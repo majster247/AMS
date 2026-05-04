@@ -12,6 +12,7 @@
 #include "mouse.h"
 #include "gui.h"
 #include "elf.h"
+#include "drm/ams_drm.h"
 #include <setjmp.h>
 
 
@@ -183,10 +184,10 @@ static void launch_doom_on_boot() {
 
 static void launch_wayland_on_boot() {
     char* session_argv[2];
-    session_argv[0] = (char*)"/wayland-session";
+    session_argv[0] = (char*)"/ams-session";
     session_argv[1] = nullptr;
 
-    write_serial_string("[BOOT] Launching Wayland-first session manager...\n");
+    write_serial_string("[BOOT] Launching ams-session (wlroots-based desktop)...\n");
 
     if (current_task) {
         kernel_task = current_task;
@@ -195,9 +196,9 @@ static void launch_wayland_on_boot() {
         kernel_task->cr3 = get_cr3();
     }
 
-    int rc = sys_exec("/wayland-session", 1, session_argv);
+    int rc = sys_exec("/ams-session", 1, session_argv);
     if (rc != 0) {
-        write_serial_string("[BOOT] Wayland session manager launch failed. Retrying...\n");
+        write_serial_string("[BOOT] ams-session launch failed. Retrying...\n");
     }
 }
 
@@ -649,6 +650,10 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     }
 
     graphics_init_double_buffer();
+    /* Bring up the software DRM/KMS/GEM/TTM stub now that we know the
+     * framebuffer geometry. Userspace Wayland/Mesa/wlroots open /dev/dri/card0
+     * to allocate dumb buffers. */
+    ams_drm_init(fb_width, fb_height, fb_width * 4);
     main_desktop = new Desktop();
     main_desktop->Init();
     main_desktop->AddWindow(new TerminalWindow(100, 100));

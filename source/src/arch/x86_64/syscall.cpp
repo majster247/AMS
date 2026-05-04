@@ -7,6 +7,7 @@
 #include "vmm.h"
 #include "gdt.h"
 #include "graphics.h"
+#include "drm/ams_drm.h"
 #include <stdint.h>
 
 typedef uint64_t (*syscall_fn)(registers* regs);
@@ -168,6 +169,9 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t FD_KIND_DEV_DRM = 8;        /* /dev/dri/card0 */
+static constexpr uint8_t FD_KIND_DEV_INPUT = 9;      /* /dev/input/eventN */
+static constexpr uint8_t FD_KIND_SHM_MEMFD = 10;     /* shm_open()-backed memfd */
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -310,6 +314,8 @@ static void clear_fd_slot(int fd) {
     } else if (fd_kind[fd] == FD_KIND_EVENTFD) {
         eventfd_state* es = (eventfd_state*)fd_aux[fd];
         if (es) kfree(es);
+    } else if (fd_kind[fd] == FD_KIND_DEV_DRM) {
+        ams_drm_close(fd);
     }
 
     open_files[fd] = nullptr;
@@ -576,6 +582,15 @@ uint64_t sys_open(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_dev_drm = (strcmp(path_buf, "/dev/dri/card0") == 0)
+                       || (strcmp(path_buf, "/dev/dri/renderD128") == 0);
+    bool pseudo_dev_input = false;
+    {
+        const char prefix[] = "/dev/input/event";
+        size_t i = 0;
+        while (prefix[i] && path_buf[i] == prefix[i]) ++i;
+        if (!prefix[i]) pseudo_dev_input = true;
+    }
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -583,7 +598,7 @@ uint64_t sys_open(registers* regs) {
         node = vfs_find(path_buf);
     }
     
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_dev_drm || pseudo_dev_input) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         // Normalizacja nazwy do "flat VFS basename":
@@ -615,7 +630,11 @@ uint64_t sys_open(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_dev_null) fd_kind[fd] = FD_KIND_DEV_NULL;
+    else if (pseudo_dev_urandom) fd_kind[fd] = FD_KIND_DEV_URANDOM;
+    else if (pseudo_dev_drm) { fd_kind[fd] = FD_KIND_DEV_DRM; ams_drm_open(fd); }
+    else if (pseudo_dev_input) fd_kind[fd] = FD_KIND_DEV_INPUT;
+    else fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -643,6 +662,15 @@ uint64_t sys_openat(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_dev_drm = (strcmp(path_buf, "/dev/dri/card0") == 0)
+                       || (strcmp(path_buf, "/dev/dri/renderD128") == 0);
+    bool pseudo_dev_input = false;
+    {
+        const char prefix[] = "/dev/input/event";
+        size_t i = 0;
+        while (prefix[i] && path_buf[i] == prefix[i]) ++i;
+        if (!prefix[i]) pseudo_dev_input = true;
+    }
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -650,7 +678,7 @@ uint64_t sys_openat(registers* regs) {
         node = vfs_find(path_buf);
     }
 
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_dev_drm || pseudo_dev_input) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         const char* normalized = path_buf;
@@ -680,7 +708,11 @@ uint64_t sys_openat(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_dev_null) fd_kind[fd] = FD_KIND_DEV_NULL;
+    else if (pseudo_dev_urandom) fd_kind[fd] = FD_KIND_DEV_URANDOM;
+    else if (pseudo_dev_drm) { fd_kind[fd] = FD_KIND_DEV_DRM; ams_drm_open(fd); }
+    else if (pseudo_dev_input) fd_kind[fd] = FD_KIND_DEV_INPUT;
+    else fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -795,10 +827,16 @@ uint64_t sys_readlink(registers* regs) {
 
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
+    uint32_t cmd = (uint32_t)regs->rsi;
+    void* argp = (void*)regs->rdx;
     if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
+    if (fd_kind[fd] == FD_KIND_DEV_DRM) {
+        if (argp && !is_probably_user_ptr(argp)) return (uint64_t)-14;
+        int rc = ams_drm_ioctl(fd, cmd, argp);
+        if (rc < 0) return (uint64_t)(int64_t)rc;
+        return (uint64_t)rc;
+    }
     return (uint64_t)-25; // ENOTTY
 }
 
