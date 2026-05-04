@@ -53,7 +53,11 @@ LIBC_OBJS := build/lib/crt0.o \
              build/lib/ctype.o \
              build/lib/stdio.o \
              build/lib/stubs.o \
-             build/lib/setjmp.o
+             build/lib/setjmp.o \
+             build/lib/wayland_stub.o \
+             build/lib/ams_libinput_shim.o \
+             build/apps/wayland-protocol.o \
+             build/apps/xdg-shell-protocol.o
 
 # =============================================================================
 # CELE
@@ -222,6 +226,20 @@ wayland_stage:
 wayland_sync_apps: wayland_stage
 	@echo "[WAYLAND] Syncing AMS Wayland app sources into stage..."
 	@bash tools/wayland_sync_apps.sh
+
+build/lib/ams_libinput_shim.o: src/lib/ams_libinput_shim.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude -c $< -o $@
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude -Iinclude/wayland -c $< -o $@
+
+build/apps/wayland-protocol.o: src/apps/wayland/generated/wayland-protocol.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude -Iinclude/wayland -c $< -o $@
+
+build/apps/xdg-shell-protocol.o: src/apps/wayland/generated/xdg-shell-protocol.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -Iinclude -Iinclude/wayland -c $< -o $@
 
 wayland_desktop_matrix: build/wayland_compositor.elf build/ams_wayland_shell.elf build/wayland_smoke.elf build/wayland_smoke_client.elf build/wayland_session.elf
 	@echo "[WAYLAND] Running desktop compatibility matrix..."
