@@ -168,6 +168,8 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t FD_KIND_DRM = 8;
+static constexpr uint8_t FD_KIND_SHM = 9;
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -583,11 +585,10 @@ uint64_t sys_open(registers* regs) {
         node = vfs_find(path_buf);
     }
     
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    bool pseudo_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_drm) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
-        // Normalizacja nazwy do "flat VFS basename":
-        // usuń wiodące '/' i './', a potem weź ostatni komponent.
         const char* normalized = path_buf;
         while (*normalized == '/') normalized++;
         while (normalized[0] == '.' && normalized[1] == '/') normalized += 2;
@@ -615,7 +616,8 @@ uint64_t sys_open(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_drm) fd_kind[fd] = FD_KIND_DRM;
+    else fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -650,7 +652,8 @@ uint64_t sys_openat(registers* regs) {
         node = vfs_find(path_buf);
     }
 
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    bool pseudo_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_drm) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         const char* normalized = path_buf;
@@ -680,7 +683,8 @@ uint64_t sys_openat(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_drm) fd_kind[fd] = FD_KIND_DRM;
+    else fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -795,10 +799,15 @@ uint64_t sys_readlink(registers* regs) {
 
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
+    uint64_t request = regs->rsi;
+    void* argp = (void*)regs->rdx;
     if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
+
+    if (fd_kind[fd] == FD_KIND_DRM) {
+        return (uint64_t)drm_ioctl((uint32_t)request, argp);
+    }
+
     return (uint64_t)-25; // ENOTTY
 }
 
@@ -1806,6 +1815,94 @@ static uint64_t sys_ams_get_fb_info(registers* regs) {
     return 0;
 }
 
+// --- DRM/KMS ---
+extern "C" int64_t drm_ioctl(uint32_t cmd, void* arg);
+extern "C" void drm_init();
+
+static uint64_t sys_ams_drm_open(registers* regs) {
+    (void)regs;
+    int fd = get_free_fd();
+    if (fd < 0) return (uint64_t)-24;
+    open_files[fd] = &g_root_dir;
+    fd_kind[fd] = FD_KIND_DRM;
+    fd_flags[fd] = 0;
+    fd_status[fd] = 0;
+    fd_aux[fd] = nullptr;
+    fd_pos[fd] = 0;
+    write_serial_string("[DRM] /dev/dri/card0 opened as fd=");
+    write_serial_dec(fd);
+    write_serial_string("\n");
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_ams_drm_ioctl(registers* regs) {
+    uint32_t cmd = (uint32_t)regs->rdi;
+    void* arg = (void*)regs->rsi;
+    if (arg && !is_probably_user_ptr(arg)) return (uint64_t)-14;
+    return (uint64_t)drm_ioctl(cmd, arg);
+}
+
+static uint64_t sys_ams_shm_open(registers* regs) {
+    const char* name = (const char*)regs->rdi;
+    int flags = (int)regs->rsi;
+    (void)regs->rdx; // mode
+
+    char path_buf[256];
+    if (name && is_probably_user_ptr(name)) {
+        copy_user_path(name, path_buf, sizeof(path_buf));
+    } else {
+        make_fallback_tmp_path(path_buf, sizeof(path_buf), g_memfd_counter++);
+    }
+
+    int fd = get_free_fd();
+    if (fd < 0) return (uint64_t)-24;
+
+    vfs_node* node = vfs_find(path_buf);
+    if (!node && (flags & 0x40)) { // O_CREAT
+        node = (vfs_node*)kmalloc(sizeof(vfs_node));
+        if (!node) return (uint64_t)-12;
+        k_memset(node, 0, sizeof(vfs_node));
+
+        const char* last = path_buf;
+        for (const char* p = path_buf; *p; ++p)
+            if (*p == '/') last = p + 1;
+        if (*last) k_strcpy(node->name, last);
+        else k_strcpy(node->name, path_buf);
+        node->type = FS_FILE;
+        node->source = FS_TAR;
+        node->max_size = 4096;
+        node->tar_data = (uint8_t*)kmalloc(node->max_size);
+        if (!node->tar_data) { kfree(node); return (uint64_t)-12; }
+        k_memset(node->tar_data, 0, node->max_size);
+        node->next = vfs_root;
+        vfs_root = node;
+    }
+    if (!node) return (uint64_t)-2;
+
+    open_files[fd] = node;
+    fd_kind[fd] = FD_KIND_SHM;
+    fd_flags[fd] = 0;
+    fd_status[fd] = (uint32_t)flags;
+    fd_aux[fd] = nullptr;
+    fd_pos[fd] = 0;
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_ams_shm_unlink(registers* regs) {
+    (void)regs;
+    return 0;
+}
+
+static uint64_t sys_setsockopt(registers* regs) {
+    (void)regs;
+    return 0;
+}
+
+static uint64_t sys_getsockopt(registers* regs) {
+    (void)regs;
+    return 0;
+}
+
 //sys_exec jest zdefiniowany w fs/elf.cpp, ale deklarujemy go tutaj, żeby móc go przypisać do syscall_table
 extern "C" int sys_exec(const char* path, int argc, char** argv);
 
@@ -1937,6 +2034,18 @@ void init_syscall_table() {
         syscall_table[SYS_AMS_GET_KEY] = sys_ams_get_key;
         syscall_table[SYS_AMS_GET_FB_INFO] = sys_ams_get_fb_info;
         syscall_table[453] = sys_ams_get_mouse_event;
+
+        // DRM/KMS syscalls
+        syscall_table[SYS_AMS_DRM_IOCTL] = sys_ams_drm_ioctl;
+        syscall_table[SYS_AMS_DRM_OPEN] = sys_ams_drm_open;
+
+        // POSIX shared memory
+        syscall_table[SYS_AMS_SHM_OPEN] = sys_ams_shm_open;
+        syscall_table[SYS_AMS_SHM_UNLINK] = sys_ams_shm_unlink;
+
+        // Socket options
+        syscall_table[SYS_SETSOCKOPT] = sys_setsockopt;
+        syscall_table[SYS_GETSOCKOPT] = sys_getsockopt;
 }
 
 // --- GŁÓWNY HANDLER ---

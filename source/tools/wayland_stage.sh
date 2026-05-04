@@ -25,3 +25,22 @@ clone_or_update "https://github.com/wayland-mirror/wayland-protocols.git" "${PRO
 echo "[wayland-stage] repositories ready:"
 echo "  - ${WAYLAND_DIR}"
 echo "  - ${PROTOCOLS_DIR}"
+echo ""
+echo "[wayland-stage] wayland-scanner available at: ${WAYLAND_DIR}/src/scanner.c"
+echo "[wayland-stage] Protocol XMLs at: ${PROTOCOLS_DIR}/"
+
+# Build wayland-scanner if meson available
+if command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then
+  WAYLAND_BUILD="${STAGE_DIR}/build-wayland"
+  if [[ ! -d "${WAYLAND_BUILD}" ]]; then
+    meson setup "${WAYLAND_BUILD}" "${WAYLAND_DIR}" \
+      -Dscanner=true \
+      -Dlibraries=false \
+      -Dtests=false \
+      -Ddocumentation=false
+    ninja -C "${WAYLAND_BUILD}" -j"$(nproc)" wayland-scanner 2>/dev/null || true
+    echo "[wayland-stage] wayland-scanner build attempted"
+  fi
+else
+  echo "[wayland-stage] meson/ninja unavailable, scanner build skipped."
+fi

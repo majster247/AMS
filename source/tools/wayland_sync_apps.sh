@@ -20,8 +20,13 @@ for app in "${apps[@]}"; do
   cp "${SRC_DIR}/${app}" "${STAGE_DIR}/${app}"
 done
 
-# Detect and trim accidental file concatenation in compositor source.
-python3 - "$STAGE_DIR/ams_wl_compositor.c" <<'PY'
+# Validate compositor source integrity
+includes_count="$(grep -c '^#include "ams_syscall.h"$' "${STAGE_DIR}/ams_wl_compositor.c" || true)"
+if [[ "${includes_count}" != "1" ]]; then
+  echo "wayland_sync_apps: compositor integrity check failed (include count=${includes_count})"
+  echo "wayland_sync_apps: attempting cleanup..."
+
+  python3 - "$STAGE_DIR/ams_wl_compositor.c" <<'PY'
 import pathlib
 import sys
 
@@ -41,7 +46,6 @@ while True:
 if not indices:
     raise SystemExit("wayland_sync_apps: compositor missing expected include header")
 
-# If a temporary stub header+main was prepended, drop everything before 2nd include.
 if len(indices) >= 2:
     prefix = text[:indices[1]]
     if "int main(void){ return 0; }" in prefix:
@@ -55,23 +59,22 @@ if len(indices) >= 2:
             indices.append(idx)
             start = idx + len(needle)
 
-# Keep only first translation unit when accidental concatenation occurred.
 if len(indices) >= 2:
     text = text[:indices[1]]
 
 text = text.rstrip() + "\n"
 path.write_text(text, encoding="utf-8")
 
-# Must still begin with expected include.
 if not text.startswith(needle):
     raise SystemExit("wayland_sync_apps: compositor cleanup produced invalid prefix")
 PY
 
-# Fail fast if compositor still looks concatenated.
-includes_count="$(awk '/^#include "ams_syscall.h"$/{c++} END{print c+0}' "${STAGE_DIR}/ams_wl_compositor.c")"
-if [[ "${includes_count}" != "1" ]]; then
-  echo "wayland_sync_apps: compositor integrity check failed (include count=${includes_count})"
-  exit 1
+  includes_count="$(grep -c '^#include "ams_syscall.h"$' "${STAGE_DIR}/ams_wl_compositor.c" || true)"
+  if [[ "${includes_count}" != "1" ]]; then
+    echo "wayland_sync_apps: compositor integrity check STILL failed"
+    exit 1
+  fi
 fi
 
 echo "[wayland-sync] AMS Wayland sources synced and validated."
+echo "[wayland-sync] Compositor: wlroots-style DRM/KMS + GEM + pixman"

@@ -269,7 +269,7 @@ void Desktop::DrawLauncher() {
     graphics_print(x + 20, y + 20, "APPS", COL_NORD8);
     graphics_draw_rect(x + 20, y + 40, menu_w - 40, 2, COL_NORD2);
 
-    const char* apps[] = {"Terminal", "XEyes", "Files", "Video", "Settings", "Doom", "Wayland", "WaylandCli", "WaylandEGL", "Shutdown"};
+    const char* apps[] = {"Terminal", "XEyes", "Files", "Video", "Settings", "Doom", "Wayland/DRM", "WaylandCli", "WaylandEGL", "Shutdown"};
     int ty = y + 60;
     for (int i = 0; i < 10; i++) {
         // Hover effect symulowany (można dodać logikę w Update)

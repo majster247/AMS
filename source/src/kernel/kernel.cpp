@@ -634,6 +634,9 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     write_serial_string("[BOOT] Mouse Initialized.\n");
     syscall_init();
     write_serial_string("[BOOT] Syscall Interface Initialized.\n");
+    extern "C" void drm_init();
+    drm_init();
+    write_serial_string("[BOOT] DRM/KMS + GEM/TTM Initialized.\n");
     enable_sse();
     write_serial_string("[BOOT] SSE Enabled.\n");
     

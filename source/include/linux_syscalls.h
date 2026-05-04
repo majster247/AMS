@@ -95,4 +95,13 @@
 #define SYS_ACCEPT4      288
 #define SYS_EPOLL_CREATE1 291
 #define SYS_STATX        332
+#define SYS_SETSOCKOPT   54
+#define SYS_GETSOCKOPT   55
+
+/* AMS DRM/KMS extensions */
+#define SYS_AMS_DRM_IOCTL  460
+#define SYS_AMS_DRM_OPEN   461
+#define SYS_AMS_SHM_OPEN   462
+#define SYS_AMS_SHM_UNLINK 463
+
 #define SYS_AMS_GET_MOUSE_EVENT 453

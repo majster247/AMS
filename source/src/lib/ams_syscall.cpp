@@ -64,7 +64,23 @@ int munmap(void* addr, size_t length) {
     return 0;
 }
 
-// Zmienne globalne dla errno (wymagane przez niektóre biblioteki C)
+int shm_open(const char* name, int oflag, int mode) {
+    return (int)ams_syscall(SYS_AMS_SHM_OPEN, (uint64_t)name, (uint64_t)oflag, (uint64_t)mode, 0, 0);
+}
+
+int shm_unlink(const char* name) {
+    return (int)ams_syscall(SYS_AMS_SHM_UNLINK, (uint64_t)name, 0, 0, 0, 0);
+}
+
+int drm_open(void) {
+    return (int)ams_syscall(SYS_AMS_DRM_OPEN, 0, 0, 0, 0, 0);
+}
+
+long drm_ioctl(int fd, unsigned long request, void* arg) {
+    (void)fd;
+    return (long)ams_syscall(SYS_AMS_DRM_IOCTL, (uint64_t)request, (uint64_t)arg, 0, 0, 0);
+}
+
 int errno_val = 0;
 int* __errno_location() { return &errno_val; }
 

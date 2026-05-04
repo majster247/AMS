@@ -26,7 +26,8 @@ int main(void) {
     compositor_argv[0] = (char*)"/ams-wl-compositor";
     compositor_argv[1] = 0;
 
-    puts1("wayland-session: starting compositor supervisor");
+    puts1("wayland-session: DRM/KMS compositor supervisor");
+    puts1("wayland-session: backend=drm/kms, renderer=pixman, protocol=wayland");
     while (1) {
         long rc = (long)ams_syscall(SYS_EXECVE, (uint64_t)"/ams-wl-compositor", (uint64_t)compositor_argv, 0, 0, 0);
         (void)rc;

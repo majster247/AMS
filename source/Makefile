@@ -214,18 +214,29 @@ build/doom.elf: $(DOOM_OBJS) $(LIBC_OBJS) src/gui/apps/user.ld
 	@echo "[LINK] Budowanie doom.elf (doomgeneric)..."
 	$(LD) $(USER_LDFLAGS) $(DOOM_OBJS) $(LIBC_OBJS) -o build/doom.elf
 
-# Wayland IPC smoke app (AF_UNIX + sendmsg/recvmsg + SCM_RIGHTS)
+# Wayland IPC + DRM/KMS compositor (wlroots-style)
 wayland_stage:
 	@echo "[WAYLAND] Cloning/updating upstream sources..."
 	@bash tools/wayland_stage.sh
+
+mesa_stage:
+	@echo "[MESA] Cloning/updating Mesa3D + libdrm..."
+	@bash tools/mesa_stage.sh
+
+wlroots_stage:
+	@echo "[WLROOTS] Cloning/updating wlroots + libinput + pixman + cairo + libffi..."
+	@bash tools/wlroots_stage.sh
 
 wayland_sync_apps: wayland_stage
 	@echo "[WAYLAND] Syncing AMS Wayland app sources into stage..."
 	@bash tools/wayland_sync_apps.sh
 
-wayland_desktop_matrix: build/wayland_compositor.elf build/ams_wayland_shell.elf build/wayland_smoke.elf build/wayland_smoke_client.elf build/wayland_session.elf
-	@echo "[WAYLAND] Running desktop compatibility matrix..."
+wayland_desktop_matrix: build/wayland_compositor.elf build/ams_wayland_shell.elf build/wayland_smoke.elf build/wayland_smoke_client.elf build/wayland_session.elf build/wayland_egl_smoke.elf
+	@echo "[WAYLAND] Running desktop compatibility matrix (DRM/KMS stack)..."
 	@bash tools/wayland_desktop_matrix.sh
+
+stage_all: wayland_stage mesa_stage wlroots_stage wayland_sync_apps
+	@echo "[STAGE] All external sources staged."
 
 build/apps/wayland_smoke.o: | wayland_sync_apps
 	@mkdir -p build/apps

@@ -16,19 +16,27 @@ void exit_program(int code);
 int get_key();
 void draw_rect(int x, int y, int w, int h, int color);
 void refresh_screen();
-// AMS custom: skopiuj bufor RGBA user-space do framebuffera
-#define SYS_AMS_FB_BLIT 450
-// AMS custom: pobierz jeden klawisz z kolejki (0 = brak)
-#define SYS_AMS_GET_KEY 451
-// AMS custom: pobierz aktualną rozdzielczość framebuffera (w,h)
-#define SYS_AMS_GET_FB_INFO 452
-// AMS custom: pobierz zdarzenie myszy (0 = brak)
-#define SYS_AMS_GET_MOUSE_EVENT 453
 
-// Dodajmy też mmap, bo TCC go szuka w syscallach
+#define SYS_AMS_FB_BLIT 450
+#define SYS_AMS_GET_KEY 451
+#define SYS_AMS_GET_FB_INFO 452
+#define SYS_AMS_GET_MOUSE_EVENT 453
+#define SYS_AMS_DRM_IOCTL 460
+#define SYS_AMS_DRM_OPEN 461
+#define SYS_AMS_SHM_OPEN 462
+#define SYS_AMS_SHM_UNLINK 463
+
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset);
 int munmap(void* addr, size_t length);
 int sys_exec(const char* path, int argc, char** argv);
+
+/* POSIX shared memory wrappers */
+int shm_open(const char* name, int oflag, int mode);
+int shm_unlink(const char* name);
+
+/* DRM wrappers */
+int drm_open(void);
+long drm_ioctl(int fd, unsigned long request, void* arg);
 
 #ifdef __cplusplus
 }

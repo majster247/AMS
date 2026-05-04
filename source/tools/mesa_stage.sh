@@ -26,7 +26,8 @@ clone_or_update "https://github.com/mesa3d/mesa.git" "${MESA_DIR}"
 echo "[mesa-stage] repositories ready:"
 echo "  - ${LIBDRM_DIR}"
 echo "  - ${MESA_DIR}"
-echo "[mesa-stage] configure software-first profile (swrast/wayland)..."
+echo "[mesa-stage] AMS-OS Mesa3D port profile: EGL + GBM (software swrast)"
+echo "[mesa-stage] Target: wayland platform with DRM/KMS backend"
 
 if command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then
   rm -rf "${MESA_BUILD_DIR}"
@@ -34,10 +35,14 @@ if command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then
     -Dplatforms=wayland \
     -Dgallium-drivers=swrast \
     -Dvulkan-drivers=[] \
-    -Ddri-drivers=[] \
+    -Degl-native-platform=drm \
+    -Dgbm=enabled \
+    -Degl=enabled \
+    -Dglx=disabled \
     -Dllvm=disabled
   ninja -C "${MESA_BUILD_DIR}" -j"$(nproc)"
-  echo "[mesa-stage] build finished: ${MESA_BUILD_DIR}"
+  echo "[mesa-stage] EGL+GBM build finished: ${MESA_BUILD_DIR}"
 else
   echo "[mesa-stage] meson/ninja unavailable, skipped local build."
+  echo "[mesa-stage] Headers and cross-compile config staged."
 fi
