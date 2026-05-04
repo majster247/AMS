@@ -35,6 +35,8 @@ extern vfs_node* vfs_root;
 void vfs_init();
 vfs_node* vfs_find(const char* name);
 vfs_node* vfs_find_node(vfs_node* start, const char* name);
+/** Remove a dynamically added flat-VFS file node (matches vfs_find naming rules). Returns true if removed. */
+bool vfs_remove_file(const char* name);
 
 // Te też muszą być uint64_t
 size_t vfs_read(vfs_node* node, uint64_t offset, size_t size, uint8_t* buffer);

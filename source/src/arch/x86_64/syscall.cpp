@@ -1,4 +1,5 @@
 #include "ams_syscall.h"
+#include "drm_ams_stub.h"
 #include "linux_syscalls.h"
 #include "abi_types.h"
 #include "kernel.h"
@@ -168,6 +169,8 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t FD_KIND_DRM = 8;
+static constexpr uint8_t FD_KIND_DRM = 8;
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -286,9 +289,276 @@ static bool fd_is_writable(int fd) {
     return true;
 }
 
+extern "C" void pmm_free_frame(void* ptr);
+
+struct drm_gem_buf {
+    bool in_use;
+    uint32_t handle;
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t pitch;
+    uint64_t size;
+    uint8_t* blob;
+    uint64_t mmap_offset;
+};
+
+struct drm_fd_state {
+    uint32_t next_handle;
+    uint64_t next_map_off;
+    drm_gem_buf gems[32];
+};
+
+static drm_gem_buf* drm_find_gem_by_handle(drm_fd_state* st, uint32_t handle) {
+    if (!st || !handle) return nullptr;
+    for (unsigned i = 0; i < 32; ++i) {
+        if (st->gems[i].in_use && st->gems[i].handle == handle) return &st->gems[i];
+    }
+    return nullptr;
+}
+
+static drm_gem_buf* drm_find_gem_by_mmap(drm_fd_state* st, uint64_t mmap_off) {
+    if (!st || !mmap_off) return nullptr;
+    for (unsigned i = 0; i < 32; ++i) {
+        if (st->gems[i].in_use && st->gems[i].mmap_offset == mmap_off) return &st->gems[i];
+    }
+    return nullptr;
+}
+
+static void drm_destroy_fd_state(drm_fd_state* st) {
+    if (!st) return;
+    for (unsigned i = 0; i < 32; ++i) {
+        if (st->gems[i].in_use && st->gems[i].blob) kfree(st->gems[i].blob);
+    }
+    kfree(st);
+}
+
+static void drm_sync_gem_from_user(drm_fd_state* st, uint64_t map_off, uint8_t* user_pages_base_va,
+                                   uint64_t length_bytes) {
+    drm_gem_buf* g = drm_find_gem_by_mmap(st, map_off);
+    if (!g || !g->blob || !current_task) return;
+    uint64_t lim = length_bytes;
+    if (lim > g->size) lim = g->size;
+    for (uint64_t i = 0; i < lim; i += 4096) {
+        uint64_t va = (uint64_t)user_pages_base_va + i;
+        uint64_t phys = vmm_get_phys_ex(current_task->cr3, va);
+        if (!phys) continue;
+        uint64_t chunk = lim - i;
+        if (chunk > 4096) chunk = 4096;
+        k_memcpy(g->blob + i, (void*)((phys & ~0xFFFULL) + PHYS_OFFSET), chunk);
+    }
+}
+
+static uint64_t drm_handle_ioctl(int fd, unsigned long request, void* argp) {
+    if (fd < 0 || fd >= 100 || fd_kind[fd] != FD_KIND_DRM || !fd_aux[fd]) return (uint64_t)-9;
+    drm_fd_state* st = (drm_fd_state*)fd_aux[fd];
+
+    if (request == AMS_DRM_IOCTL_VERSION) {
+        if (!argp || !is_probably_user_ptr(argp)) return (uint64_t)-14;
+        ams_drm_version v{};
+        k_memcpy(&v, argp, sizeof(v));
+        v.version_major = 1;
+        v.version_minor = 0;
+        v.version_patchlevel = 0;
+        const char* nm = "ams-drm";
+        if (v.name && v.name_len >= 7 && is_probably_user_ptr(v.name)) {
+            for (size_t i = 0; i < 7 && i < v.name_len; ++i) {
+                uint64_t pa = vmm_get_phys_ex(current_task->cr3, (uint64_t)v.name + i);
+                if (!pa) return (uint64_t)-14;
+                *(char*)(pa + PHYS_OFFSET) = nm[i];
+            }
+        }
+        k_memcpy(argp, &v, sizeof(v));
+        return 0;
+    }
+
+    if (request == AMS_DRM_IOCTL_GET_CAP) {
+        if (!argp || !is_probably_user_ptr(argp)) return (uint64_t)-14;
+        ams_drm_get_cap cap{};
+        k_memcpy(&cap, argp, sizeof(cap));
+        cap.value = (cap.capability == AMS_DRM_CAP_DUMB_BUFFER) ? 1ull : 0ull;
+        k_memcpy(argp, &cap, sizeof(cap));
+        return 0;
+    }
+
+    if (request == AMS_DRM_IOCTL_MODE_CREATE_DUMB) {
+        if (!argp || !is_probably_user_ptr(argp)) return (uint64_t)-14;
+        ams_drm_mode_create_dumb d{};
+        k_memcpy(&d, argp, sizeof(d));
+        if (d.width == 0 || d.height == 0 || d.bpp == 0 || d.flags != 0) return (uint64_t)-22;
+        uint32_t pitch = (d.width * (d.bpp / 8) + 3u) & ~3u;
+        uint64_t sz = (uint64_t)pitch * (uint64_t)d.height;
+        if (sz == 0 || sz > (256ull << 20)) return (uint64_t)-22;
+        int slot = -1;
+        for (unsigned i = 0; i < 32; ++i) {
+            if (!st->gems[i].in_use) {
+                slot = (int)i;
+                break;
+            }
+        }
+        if (slot < 0) return (uint64_t)-12;
+        uint8_t* blob = (uint8_t*)kmalloc((size_t)sz);
+        if (!blob) return (uint64_t)-12;
+        k_memset(blob, 0, (size_t)sz);
+        st->next_handle++;
+        uint32_t h = st->next_handle;
+        st->gems[slot].in_use = true;
+        st->gems[slot].handle = h;
+        st->gems[slot].width = d.width;
+        st->gems[slot].height = d.height;
+        st->gems[slot].bpp = d.bpp;
+        st->gems[slot].pitch = pitch;
+        st->gems[slot].size = sz;
+        st->gems[slot].blob = blob;
+        st->gems[slot].mmap_offset = 0;
+        d.handle = h;
+        d.pitch = pitch;
+        d.size = sz;
+        k_memcpy(argp, &d, sizeof(d));
+        return 0;
+    }
+
+    if (request == AMS_DRM_IOCTL_MODE_MAP_DUMB) {
+        if (!argp || !is_probably_user_ptr(argp)) return (uint64_t)-14;
+        ams_drm_mode_map_dumb m{};
+        k_memcpy(&m, argp, sizeof(m));
+        drm_gem_buf* g = drm_find_gem_by_handle(st, m.handle);
+        if (!g || !g->blob) return (uint64_t)-22;
+        if (g->mmap_offset == 0) {
+            st->next_map_off += 0x10000000ull;
+            if (st->next_map_off == 0) st->next_map_off = 0x10000000ull;
+            g->mmap_offset = AMS_DRM_MMAP_BASE + st->next_map_off;
+        }
+        m.offset = g->mmap_offset;
+        k_memcpy(argp, &m, sizeof(m));
+        return 0;
+    }
+
+    if (request == AMS_DRM_IOCTL_MODE_DESTROY_DUMB) {
+        if (!argp || !is_probably_user_ptr(argp)) return (uint64_t)-14;
+        ams_drm_mode_destroy_dumb d{};
+        k_memcpy(&d, argp, sizeof(d));
+        for (unsigned i = 0; i < 32; ++i) {
+            if (!st->gems[i].in_use || st->gems[i].handle != d.handle) continue;
+            if (st->gems[i].blob) kfree(st->gems[i].blob);
+            k_memset(&st->gems[i], 0, sizeof(st->gems[i]));
+            return 0;
+        }
+        return (uint64_t)-22;
+    }
+
+    return (uint64_t)-25;
+}
+
+struct shm_mmap_mapping {
+    uint64_t user_va;
+    uint64_t length_bytes;
+    vfs_node* node;
+    drm_fd_state* drm;
+    uint64_t drm_mmap_off;
+};
+
+static constexpr uint32_t SHM_MMAP_CAP = 128;
+static shm_mmap_mapping g_shm_mmap_tbl[SHM_MMAP_CAP];
+
+static void shm_unmap_pages(uint64_t user_va, uint64_t length_bytes, vfs_node* node_for_sync, drm_fd_state* drm_for_sync,
+                            uint64_t drm_map_off) {
+    if (!length_bytes || !current_task) return;
+    if (drm_for_sync && drm_map_off) {
+        drm_sync_gem_from_user(drm_for_sync, drm_map_off, (uint8_t*)user_va, length_bytes);
+    }
+    uint64_t len_align = (length_bytes + 4095) & ~4095ULL;
+    uint64_t pml4_phys = current_task->cr3;
+    for (uint64_t i = 0; i < len_align; i += 4096) {
+        uint64_t va = user_va + i;
+        uint64_t phys = vmm_get_phys_ex(pml4_phys, va);
+        if (!phys) continue;
+
+        void* kptr = (void*)((phys & ~0xFFFULL) + PHYS_OFFSET);
+        if (node_for_sync && node_for_sync->tar_data && (i + 4096 <= node_for_sync->max_size)) {
+            k_memcpy(node_for_sync->tar_data + i, kptr, 4096);
+        }
+
+        uint64_t* pml4 = (uint64_t*)fix_ptr(pml4_phys);
+        uint64_t pml4_idx = (va >> 39) & 0x1FF;
+        uint64_t pdpt_idx = (va >> 30) & 0x1FF;
+        uint64_t pd_idx = (va >> 21) & 0x1FF;
+        uint64_t pt_idx = (va >> 12) & 0x1FF;
+
+        if (!(pml4[pml4_idx] & PAGE_PRESENT)) continue;
+        uint64_t* pdpt = (uint64_t*)fix_ptr(pml4[pml4_idx] & ~0xFFFULL);
+        if (!(pdpt[pdpt_idx] & PAGE_PRESENT)) continue;
+        uint64_t* pd = (uint64_t*)fix_ptr(pdpt[pdpt_idx] & ~0xFFFULL);
+        if (!(pd[pd_idx] & PAGE_PRESENT) || (pd[pd_idx] & PAGE_HUGE)) continue;
+        uint64_t* pt = (uint64_t*)fix_ptr(pd[pd_idx] & ~0xFFFULL);
+        pt[pt_idx] = 0;
+        asm volatile("invlpg (%0)" ::"r"(va) : "memory");
+        pmm_free_frame((void*)(phys & ~0xFFFULL));
+    }
+}
+
+static bool shm_mmap_record(uint64_t user_va, uint64_t length_bytes, vfs_node* node, drm_fd_state* drm,
+                            uint64_t drm_mmap_off) {
+    for (uint32_t i = 0; i < SHM_MMAP_CAP; ++i) {
+        if (g_shm_mmap_tbl[i].length_bytes == 0) {
+            g_shm_mmap_tbl[i].user_va = user_va;
+            g_shm_mmap_tbl[i].length_bytes = length_bytes;
+            g_shm_mmap_tbl[i].node = node;
+            g_shm_mmap_tbl[i].drm = drm;
+            g_shm_mmap_tbl[i].drm_mmap_off = drm_mmap_off;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void shm_unmap_record(uint64_t user_va) {
+    for (uint32_t i = 0; i < SHM_MMAP_CAP; ++i) {
+        if (g_shm_mmap_tbl[i].length_bytes && g_shm_mmap_tbl[i].user_va == user_va) {
+            shm_unmap_pages(g_shm_mmap_tbl[i].user_va, g_shm_mmap_tbl[i].length_bytes, g_shm_mmap_tbl[i].node,
+                            g_shm_mmap_tbl[i].drm, g_shm_mmap_tbl[i].drm_mmap_off);
+            k_memset(&g_shm_mmap_tbl[i], 0, sizeof(g_shm_mmap_tbl[i]));
+            return;
+        }
+    }
+}
+
+static void shm_unmap_all_for_node(vfs_node* node) {
+    if (!node) return;
+    for (uint32_t i = 0; i < SHM_MMAP_CAP; ++i) {
+        if (g_shm_mmap_tbl[i].length_bytes && g_shm_mmap_tbl[i].node == node) {
+            shm_unmap_pages(g_shm_mmap_tbl[i].user_va, g_shm_mmap_tbl[i].length_bytes, node, nullptr, 0);
+            k_memset(&g_shm_mmap_tbl[i], 0, sizeof(g_shm_mmap_tbl[i]));
+        }
+    }
+}
+
+static void shm_unmap_all_for_drm(drm_fd_state* drm) {
+    if (!drm) return;
+    for (uint32_t i = 0; i < SHM_MMAP_CAP; ++i) {
+        if (g_shm_mmap_tbl[i].length_bytes && g_shm_mmap_tbl[i].drm == drm) {
+            shm_unmap_pages(g_shm_mmap_tbl[i].user_va, g_shm_mmap_tbl[i].length_bytes, nullptr,
+                            g_shm_mmap_tbl[i].drm, g_shm_mmap_tbl[i].drm_mmap_off);
+            k_memset(&g_shm_mmap_tbl[i], 0, sizeof(g_shm_mmap_tbl[i]));
+        }
+    }
+}
+
+static bool shm_mmap_record_legacy(uint64_t user_va, uint64_t length_bytes, vfs_node* node) {
+    return shm_mmap_record(user_va, length_bytes, node, nullptr, 0);
+}
+
 static void clear_fd_slot(int fd) {
     if (fd < 0 || fd >= 100) return;
     if (!open_files[fd]) return;
+
+    if (fd_kind[fd] == FD_KIND_FILE) {
+        shm_unmap_all_for_node(open_files[fd]);
+    } else if (fd_kind[fd] == FD_KIND_DRM) {
+        drm_fd_state* st = (drm_fd_state*)fd_aux[fd];
+        shm_unmap_all_for_drm(st);
+        drm_destroy_fd_state(st);
+    }
 
     if (fd_kind[fd] == FD_KIND_SOCKET) {
         unix_socket_state* us = &g_unix_sockets[fd];
@@ -576,6 +846,7 @@ uint64_t sys_open(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -584,6 +855,8 @@ uint64_t sys_open(registers* regs) {
     }
     
     if (pseudo_dev_null || pseudo_dev_urandom) {
+        node = &g_root_dir;
+    } else if (pseudo_drm) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         // Normalizacja nazwy do "flat VFS basename":
@@ -615,10 +888,18 @@ uint64_t sys_open(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_drm) {
+        drm_fd_state* st = (drm_fd_state*)kmalloc(sizeof(drm_fd_state));
+        if (!st) return -12;
+        k_memset(st, 0, sizeof(*st));
+        fd_kind[fd] = FD_KIND_DRM;
+        fd_aux[fd] = st;
+    } else {
+        fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+        fd_aux[fd] = nullptr;
+    }
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
-    fd_aux[fd] = nullptr;
     fd_pos[fd] = 0;
     return fd;
 }
@@ -643,6 +924,7 @@ uint64_t sys_openat(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -651,6 +933,8 @@ uint64_t sys_openat(registers* regs) {
     }
 
     if (pseudo_dev_null || pseudo_dev_urandom) {
+        node = &g_root_dir;
+    } else if (pseudo_drm) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         const char* normalized = path_buf;
@@ -680,12 +964,31 @@ uint64_t sys_openat(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_drm) {
+        drm_fd_state* st = (drm_fd_state*)kmalloc(sizeof(drm_fd_state));
+        if (!st) return -12;
+        k_memset(st, 0, sizeof(*st));
+        fd_kind[fd] = FD_KIND_DRM;
+        fd_aux[fd] = st;
+    } else {
+        fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+        fd_aux[fd] = nullptr;
+    }
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
-    fd_aux[fd] = nullptr;
     fd_pos[fd] = 0;
     return fd;
+}
+
+uint64_t sys_unlink(registers* regs) {
+    const char* path = (const char*)regs->rdi;
+    char path_buf[256];
+    if (!copy_user_path(path, path_buf, sizeof(path_buf))) {
+        dbg_path("unlink", path, nullptr);
+        return (uint64_t)-14;
+    }
+    dbg_path("unlink", path, path_buf);
+    return vfs_remove_file(path_buf) ? 0 : (uint64_t)-2;
 }
 
 uint64_t sys_access(registers* regs) {
@@ -795,11 +1098,12 @@ uint64_t sys_readlink(registers* regs) {
 
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
-    if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
-    if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
-    return (uint64_t)-25; // ENOTTY
+    unsigned long request = (unsigned long)regs->rsi;
+    void* argp = (void*)regs->rdx;
+    if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25;
+    if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9;
+    if (fd_kind[fd] == FD_KIND_DRM) return drm_handle_ioctl(fd, request, argp);
+    return (uint64_t)-25;
 }
 
 uint64_t sys_dup(registers* regs) {
@@ -1684,19 +1988,80 @@ uint64_t sys_wait4(registers* regs) {
 }
 
 uint64_t sys_mmap(registers* regs) {
+    (void)regs->rdi; // addr hint ignored
     uint64_t length = regs->rsi;
-    length = (length + 4095) & ~4095ULL;
-    
-    static uint64_t mmap_ptr = 0x400000000; // Startujemy wysoko
-    uint64_t addr = mmap_ptr;
+    (void)regs->rdx; // prot — user mappings are always RWX for now
+    int flags = (int)regs->r10;
+    int fd = (int)regs->r8;
+    uint64_t offset = regs->r9;
 
-    for (uint64_t i = 0; i < length; i += 4096) {
-        void* phys = pmm_alloc_frame();
-        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7); // USER | WRITABLE | PRESENT
-        k_memset((void*)((uint64_t)phys + 0xFFFF800000000000ULL), 0, 4096);
+    if (length == 0) return (uint64_t)-22; // EINVAL
+
+    length = (length + 4095) & ~4095ULL;
+
+    constexpr int MAP_SHARED_AMS = 1;
+    constexpr int MAP_ANONYMOUS_AMS = 32;
+
+    static uint64_t user_mmap_top = 0x400000000ULL;
+
+    if ((flags & MAP_ANONYMOUS_AMS) || fd < 0) {
+        uint64_t addr = user_mmap_top;
+        for (uint64_t i = 0; i < length; i += 4096) {
+            void* phys = pmm_alloc_frame();
+            if (!phys) return (uint64_t)-12;
+            vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7);
+            k_memset((void*)((uint64_t)phys + PHYS_OFFSET), 0, 4096);
+        }
+        user_mmap_top += length;
+        return addr;
     }
 
-    mmap_ptr += length;
+    if (fd >= 100 || !open_files[fd]) return (uint64_t)-9;
+
+    if (fd_kind[fd] == FD_KIND_DRM) {
+        drm_fd_state* st = (drm_fd_state*)fd_aux[fd];
+        if (!st) return (uint64_t)-9;
+        drm_gem_buf* g = drm_find_gem_by_mmap(st, offset);
+        if (!g || !g->blob) return (uint64_t)-22;
+        uint64_t blob_len = (g->size + 4095) & ~4095ULL;
+        if (length != blob_len) return (uint64_t)-22;
+
+        uint64_t addr = user_mmap_top;
+        for (uint64_t i = 0; i < length; i += 4096) {
+            void* phys = pmm_alloc_frame();
+            if (!phys) return (uint64_t)-12;
+            k_memcpy((void*)((uint64_t)phys + PHYS_OFFSET), g->blob + i, 4096);
+            vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7);
+        }
+        user_mmap_top += length;
+        if (!shm_mmap_record(addr, length, nullptr, st, g->mmap_offset)) {
+            shm_unmap_pages(addr, length, nullptr, nullptr, 0);
+            return (uint64_t)-12;
+        }
+        return addr;
+    }
+
+    if (fd_kind[fd] != FD_KIND_FILE) return (uint64_t)-9;
+    vfs_node* f = open_files[fd];
+    if (!f->tar_data || f->max_size == 0) return (uint64_t)-22;
+    if (offset >= f->max_size) return (uint64_t)-22;
+    if (offset + length > f->max_size) return (uint64_t)-22;
+
+    uint64_t addr = user_mmap_top;
+    for (uint64_t i = 0; i < length; i += 4096) {
+        void* phys = pmm_alloc_frame();
+        if (!phys) return (uint64_t)-12;
+        k_memcpy((void*)((uint64_t)phys + PHYS_OFFSET), f->tar_data + offset + i, 4096);
+        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7);
+    }
+    user_mmap_top += length;
+
+    if (flags & MAP_SHARED_AMS) {
+        if (!shm_mmap_record_legacy(addr, length, f)) {
+            shm_unmap_pages(addr, length, nullptr, nullptr, 0);
+            return (uint64_t)-12;
+        }
+    }
     return addr;
 }
 
@@ -1706,8 +2071,8 @@ uint64_t sys_mprotect(registers* regs) {
 }
 
 uint64_t sys_munmap(registers* regs) {
-    (void)regs->rdi;
-    (void)regs->rsi;
+    uint64_t addr = regs->rdi;
+    shm_unmap_record(addr);
     return 0;
 }
 
@@ -1854,6 +2219,7 @@ void init_syscall_table() {
     syscall_table[SYS_READV]    = sys_readv;
     syscall_table[SYS_WRITEV]   = sys_writev;
     syscall_table[SYS_OPENAT]   = sys_openat;
+    syscall_table[SYS_UNLINK]   = sys_unlink;
     syscall_table[SYS_ACCESS]   = sys_access;
     syscall_table[SYS_SOCKET]   = sys_socket;
     syscall_table[SYS_SHUTDOWN] = sys_shutdown;

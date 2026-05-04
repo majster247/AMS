@@ -34,6 +34,10 @@ int close(int fd) {
     return (int)ams_syscall(3, fd, 0, 0, 0, 0);
 }
 
+int ioctl(int fd, unsigned long request, void* argp) {
+    return (int)ams_syscall(16, (uint64_t)fd, (uint64_t)request, (uint64_t)argp, 0, 0);
+}
+
 int read(int fd, void* buf, int count) {
     // Dodajemy dwa zera na końcu
     return (int)ams_syscall(0, fd, (uint64_t)buf, count, 0, 0); 
@@ -44,8 +48,21 @@ long lseek(int fd, long offset, int whence) {
     return (long)ams_syscall(8, fd, (uint64_t)offset, whence, 0, 0); 
 }
 int unlink(const char* pathname) {
-    (void)pathname; 
-    return 0; 
+    return (int)ams_syscall(87, (uint64_t)pathname, 0, 0, 0, 0);
+}
+
+int shm_open(const char* name, int oflag, unsigned int mode) {
+    (void)mode;
+    char buf[256];
+    const char* p = name ? name : "";
+    while (p[0] == '/') p++;
+    if (strncmp(p, "dev/shm/", 8) == 0) p += 8;
+    buf[0] = '/';
+    size_t i = 1;
+    while (*p && i < sizeof(buf) - 1) buf[i++] = *p++;
+    buf[i] = '\0';
+    if (i <= 1) return -1;
+    return open(buf, oflag);
 }
 
 int get_key() {

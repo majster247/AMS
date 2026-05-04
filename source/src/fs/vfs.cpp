@@ -5,6 +5,7 @@
 
 // Musisz mieć funkcję kmalloc zadeklarowaną gdzieś
 extern "C" void* kmalloc(size_t size);
+extern "C" void kfree(void* ptr);
 extern "C" int strcmp(const char* s1, const char* s2);
 
 vfs_node* vfs_root = nullptr;
@@ -198,6 +199,26 @@ size_t vfs_read(vfs_node* node, uint64_t offset, size_t size, uint8_t* buffer) {
 
 vfs_node* vfs_find_node(vfs_node* root, const char* name) {
     return vfs_find(name); // Przekierowanie na naszą nową funkcję
+}
+
+bool vfs_remove_file(const char* name) {
+    vfs_node* target = vfs_find(name);
+    if (!target || target->is_directory) return false;
+
+    vfs_node* prev = nullptr;
+    vfs_node* curr = vfs_root;
+    while (curr) {
+        if (curr == target) {
+            if (prev) prev->next = curr->next;
+            else vfs_root = curr->next;
+            if (curr->tar_data) kfree(curr->tar_data);
+            kfree(curr);
+            return true;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+    return false;
 }
 
 uint64_t vfs_write(vfs_node* node, uint64_t offset, uint64_t size, uint8_t* buffer) {

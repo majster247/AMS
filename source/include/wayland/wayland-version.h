@@ -1,0 +1,10 @@
+#ifndef WAYLAND_VERSION_H
+#define WAYLAND_VERSION_H
+
+/* Matches host wayland-scanner used to generate protocol sources. */
+#define WAYLAND_VERSION_MAJOR 1
+#define WAYLAND_VERSION_MINOR 22
+#define WAYLAND_VERSION_MICRO 0
+#define WAYLAND_VERSION "1.22.0"
+
+#endif

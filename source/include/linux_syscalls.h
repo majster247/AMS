@@ -1,5 +1,9 @@
 #pragma once
 
+/* Note: This project does not ship the mlibc project as system libc. These
+   numbers exist so user code and tools that expect the Linux x86_64 syscall
+   table can share the same numeric definitions. */
+
 #define SYS_READ         0
 #define SYS_WRITE        1
 #define SYS_OPEN         2
@@ -48,6 +52,7 @@
 #define SYS_GETDENTS64   217
 #define SYS_CLOCK_GETTIME 228
 #define SYS_ARCH_PRCTL   158 // Kluczowe dla mlibc (ustawianie FS/GS)
+#define SYS_UNLINK       87
 #define SYS_OPENAT       257
 #define SYS_NEWFSTATAT   262
 #define SYS_FACCESSAT    269

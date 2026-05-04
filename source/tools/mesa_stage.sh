@@ -23,7 +23,7 @@ clone_or_update() {
 clone_or_update "https://gitlab.freedesktop.org/mesa/drm.git" "${LIBDRM_DIR}"
 clone_or_update "https://github.com/mesa3d/mesa.git" "${MESA_DIR}"
 
-echo "[mesa-stage] repositories ready:"
+echo "[mesa-stage] Cross-build for x86_64-elf is not automated here; use host meson build for reference."
 echo "  - ${LIBDRM_DIR}"
 echo "  - ${MESA_DIR}"
 echo "[mesa-stage] configure software-first profile (swrast/wayland)..."
