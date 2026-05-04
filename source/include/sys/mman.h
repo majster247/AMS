@@ -9,11 +9,19 @@
 #define MAP_SHARED 1
 #define MAP_PRIVATE 2
 #define MAP_ANONYMOUS 32
+#define MAP_ANON MAP_ANONYMOUS
 #define MAP_FAILED ((void*)-1)
 
-/* Usuń extern "C" - to jest czyste C! */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset);
 int munmap(void* addr, size_t length);
 int mprotect(void *addr, size_t len, int prot);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

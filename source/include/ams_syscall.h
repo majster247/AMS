@@ -3,12 +3,42 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
+#include <poll.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3, uint64_t p4, uint64_t p5);
+
+int open(const char* path, int flags, ...);
+int close(int fd);
+ssize_t read(int fd, void* buf, size_t count);
+ssize_t write(int fd, const void* buf, size_t count);
+long lseek(int fd, long offset, int whence);
+int fcntl(int fd, int cmd, ...);
+int openat(int dirfd, const char* path, int flags, ...);
+int ioctl(int fd, unsigned long req, ...);
+
+int poll(struct pollfd* fds, size_t nfds, int timeout);
+int ppoll(struct pollfd* fds, size_t nfds, const void* timeout_ts, const void* sigmask);
+int epoll_create1(int flags);
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event);
+int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout);
+
+int socket(int domain, int type, int protocol);
+int bind(int sockfd, const struct sockaddr* addr, unsigned int addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr* addr, unsigned int* addrlen);
+int connect(int sockfd, const struct sockaddr* addr, unsigned int addrlen);
+long sendmsg(int sockfd, const struct msghdr* msg, int flags);
+long recvmsg(int sockfd, struct msghdr* msg, int flags);
+
+int shm_open(const char* name, int oflag, unsigned int mode);
+int shm_unlink(const char* name);
 
 void print_char(char c);
 void print_string(const char* str);
