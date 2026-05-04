@@ -405,6 +405,16 @@ uint64_t sys_read(registers* regs) {
     }
 
     if (fd_kind[fd] == FD_KIND_EVENTFD) {
+        eventfd_state* es = (eventfd_state*)fd_aux[fd];
+        if (!es) return (uint64_t)-9;
+        if (count < 8) return (uint64_t)-22;
+        if (es->value == 0) return (uint64_t)-11;
+        uint64_t v = es->value;
+        es->value = 0;
+        k_memcpy(buf, &v, 8);
+        return 8;
+    }
+
     if (fd_kind[fd] == FD_KIND_DEV_NULL) {
         return 0;
     }
@@ -418,16 +428,6 @@ uint64_t sys_read(registers* regs) {
             produced += chunk;
         }
         return produced;
-    }
-
-        eventfd_state* es = (eventfd_state*)fd_aux[fd];
-        if (!es) return (uint64_t)-9;
-        if (count < 8) return (uint64_t)-22;
-        if (es->value == 0) return (uint64_t)-11;
-        uint64_t v = es->value;
-        es->value = 0;
-        k_memcpy(buf, &v, 8);
-        return 8;
     }
 
     size_t read_bytes = 0;
