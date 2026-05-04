@@ -58,7 +58,7 @@ LIBC_OBJS := build/lib/crt0.o \
 # =============================================================================
 # CELE
 # =============================================================================
-all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf $(ISO_IMAGE) $(DISK_IMAGE)
+all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf build/wlroots_ams.elf $(ISO_IMAGE) $(DISK_IMAGE)
 
 # --- KOMPILACJA JĄDRA ---
 
@@ -307,8 +307,76 @@ build/bash.elf: build/apps/bash.o $(LIBC_OBJS) src/gui/apps/user.ld
 	@echo "[LINK] Budowanie bash.elf..."
 	$(LD) $(USER_LDFLAGS) build/apps/bash.o $(LIBC_OBJS) -o build/bash.elf
 
+# =============================================================================
+# LINUX COMPAT LAYER: libffi, pixman, libdrm, libinput, wlroots-ams backend
+# =============================================================================
+
+COMPAT_CFLAGS = $(USER_CFLAGS) -std=gnu99 -Iinclude -Iinclude/wayland-generated \
+                -Isrc/lib/drm -Isrc/lib/input -Isrc/lib/pixman -Isrc/lib/ffi
+
+# --- libffi ---
+build/lib/ffi/ffi.o: src/lib/ffi/ffi.c
+	@mkdir -p build/lib/ffi
+	x86_64-elf-gcc $(COMPAT_CFLAGS) -c $< -o $@
+
+build/lib/ffi/ffi_x86_64.o: src/lib/ffi/ffi_x86_64.s
+	@mkdir -p build/lib/ffi
+	$(AS) $(ASFLAGS) $< -o $@
+
+LIB_FFI_OBJS = build/lib/ffi/ffi.o build/lib/ffi/ffi_x86_64.o
+
+# --- pixman ---
+build/lib/pixman/pixman.o: src/lib/pixman/pixman.c
+	@mkdir -p build/lib/pixman
+	x86_64-elf-gcc $(COMPAT_CFLAGS) -c $< -o $@
+
+LIB_PIXMAN_OBJS = build/lib/pixman/pixman.o
+
+# --- libdrm ---
+build/lib/drm/drm.o: src/lib/drm/drm.c
+	@mkdir -p build/lib/drm
+	x86_64-elf-gcc $(COMPAT_CFLAGS) -Isrc/lib/drm -c $< -o $@
+
+LIB_DRM_OBJS = build/lib/drm/drm.o
+
+# --- libinput ---
+build/lib/input/libinput.o: src/lib/input/libinput.c
+	@mkdir -p build/lib/input
+	x86_64-elf-gcc $(COMPAT_CFLAGS) -Isrc/lib/input -c $< -o $@
+
+LIB_INPUT_OBJS = build/lib/input/libinput.o
+
+# --- shm ---
+build/lib/shm.o: src/lib/shm.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(COMPAT_CFLAGS) -c $< -o $@
+
+LIB_SHM_OBJ = build/lib/shm.o
+
+# --- wlroots-ams backend ---
+WLROOTS_AMS_CFLAGS = $(COMPAT_CFLAGS) \
+                     -Isrc/lib/drm -Isrc/lib/input -Isrc/lib/pixman -Isrc/lib/ffi \
+                     -Isrc/apps/wlroots-ams
+
+build/apps/wlroots_ams/ams_backend.o: src/apps/wlroots-ams/ams_backend.c
+	@mkdir -p build/apps/wlroots_ams
+	x86_64-elf-gcc $(WLROOTS_AMS_CFLAGS) -c $< -o $@
+
+build/apps/wlroots_ams/ams_compositor_main.o: src/apps/wlroots-ams/ams_compositor_main.c
+	@mkdir -p build/apps/wlroots_ams
+	x86_64-elf-gcc $(WLROOTS_AMS_CFLAGS) -c $< -o $@
+
+WLROOTS_AMS_OBJS = build/apps/wlroots_ams/ams_backend.o \
+                   build/apps/wlroots_ams/ams_compositor_main.o
+
+ALL_COMPAT_LIBS = $(LIB_FFI_OBJS) $(LIB_PIXMAN_OBJS) $(LIB_DRM_OBJS) $(LIB_INPUT_OBJS) $(LIB_SHM_OBJ)
+
+build/wlroots_ams.elf: $(WLROOTS_AMS_OBJS) $(ALL_COMPAT_LIBS) $(LIBC_OBJS) src/gui/apps/user.ld
+	@echo "[LINK] Budowanie wlroots_ams.elf..."
+	$(LD) $(USER_LDFLAGS) $(WLROOTS_AMS_OBJS) $(ALL_COMPAT_LIBS) $(LIBC_OBJS) -o $@
+
 # --- OBRAZY ---
-$(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf
+$(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf build/wlroots_ams.elf
 	@echo "[DISK] Budowanie srodowiska testowego..."
 	qemu-img create -f raw $(DISK_IMAGE) $(DISK_SIZE)
 	mkfs.ext2 -b 4096 $(DISK_IMAGE)
@@ -341,6 +409,7 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	sudo cp build/wayland_smoke_client.elf ./temp_mount/programs/wayland/wayland-smoke-client
 	sudo cp build/wayland_session.elf ./temp_mount/programs/wayland/wayland-session
 	sudo cp build/ams_wayland_shell.elf ./temp_mount/programs/wayland/ams-wayland-shell
+	sudo cp build/wlroots_ams.elf ./temp_mount/programs/wayland/wlroots-ams
 
 	# Narzędzia systemowe
 	sudo cp build/apt.elf ./temp_mount/tools/system/apt

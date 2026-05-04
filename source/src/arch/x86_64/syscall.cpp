@@ -7,7 +7,26 @@
 #include "vmm.h"
 #include "gdt.h"
 #include "graphics.h"
+#include "drm_virt.h"
+#include "evdev.h"
 #include <stdint.h>
+
+/* ---- forward declarations for new subsystems ---- */
+extern "C" void drm_virt_init(void);
+extern "C" void evdev_init(void);
+extern "C" uint64_t drm_virt_ioctl(int fd, uint64_t request, uint64_t arg);
+extern "C" uint64_t drm_virt_mmap_dumb(uint64_t map_offset, uint64_t length);
+extern "C" int64_t  evdev_read(int device_idx, uint8_t* buf, uint64_t len);
+extern "C" int      evdev_poll_ready(int device_idx);
+extern "C" int      evdev_index_from_name(const char* name);
+
+/* DRM mmap offset base — must match drm_virt.cpp */
+#define DUMB_MMAP_BASE 0x100000000ULL
+
+/* Marker stored in tar_data of evdev VFS nodes so we know device index */
+#define FD_KIND_EVDEV  8
+#define FD_KIND_DRM    9
+#define FD_KIND_TIMER  10
 
 typedef uint64_t (*syscall_fn)(registers* regs);
 static constexpr uint64_t SYSCALL_TABLE_SIZE = 512;
@@ -264,6 +283,10 @@ static bool fd_is_readable(int fd) {
         eventfd_state* es = (eventfd_state*)fd_aux[fd];
         return es && es->value > 0;
     }
+    if (fd_kind[fd] == FD_KIND_EVDEV) {
+        int dev_idx = evdev_index_from_name(open_files[fd]->name);
+        return dev_idx >= 0 && evdev_poll_ready(dev_idx) != 0;
+    }
     return true;
 }
 
@@ -419,6 +442,19 @@ uint64_t sys_read(registers* regs) {
         return 0;
     }
 
+    /* evdev device read — returns struct input_event records */
+    if (fd_kind[fd] == FD_KIND_EVDEV) {
+        int dev_idx = evdev_index_from_name(open_files[fd]->name);
+        if (dev_idx < 0) return (uint64_t)-9;
+        int64_t n = evdev_read(dev_idx, buf, count);
+        return (n < 0) ? (uint64_t)-9 : (uint64_t)n;
+    }
+
+    /* DRM nodes are not readable via read() */
+    if (fd_kind[fd] == FD_KIND_DRM) {
+        return (uint64_t)-22;
+    }
+
     if (fd_kind[fd] == FD_KIND_DEV_URANDOM) {
         size_t produced = 0;
         while (produced < count) {
@@ -560,6 +596,103 @@ uint64_t sys_writev(registers* regs) {
     return total;
 }
 
+/* Helper: compare two C strings (without external strcmp where it may not exist) */
+static bool streq(const char* a, const char* b) {
+    while (*a && *b && *a == *b) { ++a; ++b; }
+    return *a == *b;
+}
+
+/* Helper: check if path starts with prefix */
+static bool startswith(const char* s, const char* pfx) {
+    while (*pfx) { if (*s++ != *pfx++) return false; }
+    return true;
+}
+
+static int open_common(char* path_buf, int flags) {
+    vfs_node* node = nullptr;
+    bool pseudo_dev_null     = streq(path_buf, "/dev/null");
+    bool pseudo_dev_urandom  = streq(path_buf, "/dev/urandom");
+    bool pseudo_dev_drm      = streq(path_buf, "/dev/dri/card0");
+    bool pseudo_dev_evdev0   = streq(path_buf, "/dev/input/event0");
+    bool pseudo_dev_evdev1   = streq(path_buf, "/dev/input/event1");
+    bool is_shm = startswith(path_buf, "/dev/shm/") && path_buf[9] != '\0';
+
+    uint8_t kind = FD_KIND_FILE;
+
+    if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
+        (path_buf[0] == '.' && path_buf[1] == '\0')) {
+        node = &g_root_dir;
+    } else if (pseudo_dev_null) {
+        node = &g_root_dir; kind = FD_KIND_DEV_NULL;
+    } else if (pseudo_dev_urandom) {
+        node = &g_root_dir; kind = FD_KIND_DEV_URANDOM;
+    } else if (pseudo_dev_drm) {
+        node = vfs_find("card0");
+        if (!node) node = &g_root_dir;
+        kind = FD_KIND_DRM;
+    } else if (pseudo_dev_evdev0) {
+        node = vfs_find("event0");
+        if (!node) node = &g_root_dir;
+        kind = FD_KIND_EVDEV;
+    } else if (pseudo_dev_evdev1) {
+        node = vfs_find("event1");
+        if (!node) node = &g_root_dir;
+        kind = FD_KIND_EVDEV;
+    } else if (is_shm) {
+        /* /dev/shm/<name>: find or create a memfd-style node */
+        const char* shm_name = path_buf + 9;
+        node = vfs_find(shm_name);
+        if (!node && (flags & 0x40)) { /* O_CREAT */
+            node = (vfs_node*)kmalloc(sizeof(vfs_node));
+            k_memset(node, 0, sizeof(vfs_node));
+            k_strcpy(node->name, shm_name);
+            node->type     = FS_FILE;
+            node->source   = FS_TAR;
+            node->max_size = 4096;
+            node->tar_data = (uint8_t*)kmalloc(4096);
+            k_memset(node->tar_data, 0, 4096);
+            node->next = vfs_root;
+            vfs_root   = node;
+        }
+        kind = FD_KIND_FILE;
+    } else {
+        node = vfs_find(path_buf);
+        if (!node && (flags & 0x40)) { /* O_CREAT */
+            const char* normalized = path_buf;
+            while (*normalized == '/') normalized++;
+            while (normalized[0] == '.' && normalized[1] == '/') normalized += 2;
+            const char* last = normalized;
+            for (const char* p = normalized; *p; ++p) {
+                if (*p == '/') last = p + 1;
+            }
+            if (*last) normalized = last;
+            node = (vfs_node*)kmalloc(sizeof(vfs_node));
+            k_memset(node, 0, sizeof(vfs_node));
+            k_strcpy(node->name, normalized);
+            node->next = vfs_root;
+            vfs_root = node;
+        }
+    }
+
+    if (!node) return -2; /* ENOENT */
+
+    if ((flags & 0x200) && kind == FD_KIND_FILE) { /* O_TRUNC */
+        node->size = 0;
+        node->current_pos = 0;
+    }
+
+    int fd = get_free_fd();
+    if (fd == -1) return -24; /* EMFILE */
+
+    open_files[fd] = node;
+    fd_kind[fd]   = kind;
+    fd_flags[fd]  = 0;
+    fd_status[fd] = (uint32_t)flags;
+    fd_aux[fd]    = nullptr;
+    fd_pos[fd]    = 0;
+    return fd;
+}
+
 uint64_t sys_open(registers* regs) {
     const char* path = (const char*)regs->rdi;
     int flags = (int)regs->rsi;
@@ -572,61 +705,10 @@ uint64_t sys_open(registers* regs) {
         make_fallback_tmp_path(path_buf, sizeof(path_buf), (uint64_t)path);
     }
     dbg_path("open", path, path_buf);
-    
-    vfs_node* node = nullptr;
-    bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
-    bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
-    if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
-        (path_buf[0] == '.' && path_buf[1] == '\0')) {
-        node = &g_root_dir;
-    } else {
-        node = vfs_find(path_buf);
-    }
-    
-    if (pseudo_dev_null || pseudo_dev_urandom) {
-        node = &g_root_dir;
-    } else if (!node && (flags & 0x40)) { // O_CREAT
-        // Normalizacja nazwy do "flat VFS basename":
-        // usuń wiodące '/' i './', a potem weź ostatni komponent.
-        const char* normalized = path_buf;
-        while (*normalized == '/') normalized++;
-        while (normalized[0] == '.' && normalized[1] == '/') normalized += 2;
-        const char* last = normalized;
-        for (const char* p = normalized; *p; ++p) {
-            if (*p == '/') last = p + 1;
-        }
-        if (*last) normalized = last;
-
-        node = (vfs_node*)kmalloc(sizeof(vfs_node));
-        k_memset(node, 0, sizeof(vfs_node));
-        k_strcpy(node->name, normalized);
-        node->next = vfs_root;
-        vfs_root = node;
-    }
-
-    if (!node) return -2; // ENOENT
-
-    if (flags & 0x200) { // O_TRUNC
-        node->size = 0;
-        node->current_pos = 0;
-    }
-
-    int fd = get_free_fd();
-    if (fd == -1) return -24; // EMFILE
-
-    open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
-    fd_flags[fd] = 0;
-    fd_status[fd] = (uint32_t)flags;
-    fd_aux[fd] = nullptr;
-    fd_pos[fd] = 0;
-    return fd;
+    return (uint64_t)(int64_t)open_common(path_buf, flags);
 }
 
 uint64_t sys_openat(registers* regs) {
-    // Linux x86_64 ABI:
-    // rdi = dirfd, rsi = pathname, rdx = flags, r10 = mode
-    // Na razie traktujemy VFS jako flat namespace, więc dirfd ignorujemy.
     (void)regs->rdi; // dirfd
     const char* path = (const char*)regs->rsi;
     int flags = (int)regs->rdx;
@@ -639,54 +721,9 @@ uint64_t sys_openat(registers* regs) {
         make_fallback_tmp_path(path_buf, sizeof(path_buf), (uint64_t)path);
     }
     dbg_path("openat", path, path_buf);
-
-    vfs_node* node = nullptr;
-    bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
-    bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
-    if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
-        (path_buf[0] == '.' && path_buf[1] == '\0')) {
-        node = &g_root_dir;
-    } else {
-        node = vfs_find(path_buf);
-    }
-
-    if (pseudo_dev_null || pseudo_dev_urandom) {
-        node = &g_root_dir;
-    } else if (!node && (flags & 0x40)) { // O_CREAT
-        const char* normalized = path_buf;
-        while (*normalized == '/') normalized++;
-        while (normalized[0] == '.' && normalized[1] == '/') normalized += 2;
-        const char* last = normalized;
-        for (const char* p = normalized; *p; ++p) {
-            if (*p == '/') last = p + 1;
-        }
-        if (*last) normalized = last;
-
-        node = (vfs_node*)kmalloc(sizeof(vfs_node));
-        k_memset(node, 0, sizeof(vfs_node));
-        k_strcpy(node->name, normalized);
-        node->next = vfs_root;
-        vfs_root = node;
-    }
-
-    if (!node) return -2; // ENOENT
-
-    if (flags & 0x200) { // O_TRUNC
-        node->size = 0;
-        node->current_pos = 0;
-    }
-
-    int fd = get_free_fd();
-    if (fd == -1) return -24; // EMFILE
-
-    open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
-    fd_flags[fd] = 0;
-    fd_status[fd] = (uint32_t)flags;
-    fd_aux[fd] = nullptr;
-    fd_pos[fd] = 0;
-    return fd;
+    return (uint64_t)(int64_t)open_common(path_buf, flags);
 }
+
 
 uint64_t sys_access(registers* regs) {
     const char* path = (const char*)regs->rdi;
@@ -795,10 +832,32 @@ uint64_t sys_readlink(registers* regs) {
 
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
+    uint64_t request = regs->rsi;
+    uint64_t argp    = regs->rdx;
     if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
+
+    /* Route DRM ioctls to the virtual DRM driver */
+    if (fd_kind[fd] == FD_KIND_DRM) {
+        return drm_virt_ioctl(fd, request, argp);
+    }
+
+    /* EVDEV ioctl stubs (EVIOCGNAME, EVIOCGID, EVIOCGBIT) — return minimal info */
+    if (fd_kind[fd] == FD_KIND_EVDEV) {
+        uint8_t nr = (uint8_t)((request >> 8) & 0xFF);
+        if (nr == 0x06) { /* EVIOCGNAME */
+            uint64_t len = (request >> 16) & 0xFF;
+            if (argp && is_probably_user_ptr((void*)argp) && len > 0) {
+                const char* name = "ams-input";
+                uint64_t n = k_strlen(name);
+                if (n >= len) n = len - 1;
+                k_memcpy((void*)argp, name, n + 1);
+            }
+            return 9;
+        }
+        return 0; /* accept all other evdev ioctls silently */
+    }
+
     return (uint64_t)-25; // ENOTTY
 }
 
@@ -1684,9 +1743,65 @@ uint64_t sys_wait4(registers* regs) {
 }
 
 uint64_t sys_mmap(registers* regs) {
+    /* rdi=addr, rsi=length, rdx=prot, r10=flags, r8=fd, r9=offset */
     uint64_t length = regs->rsi;
+    uint64_t flags  = regs->r10;
+    int      fd     = (int)regs->r8;
+    uint64_t offset = regs->r9;
+
     length = (length + 4095) & ~4095ULL;
-    
+    if (length == 0) return (uint64_t)-22;
+
+    /* MAP_SHARED with a DRM dumb-buffer mmap offset */
+    if ((flags & 0x01) && fd >= 0 && fd < 100 && open_files[fd] &&
+        fd_kind[fd] == FD_KIND_DRM && offset >= DUMB_MMAP_BASE) {
+        uint64_t result = drm_virt_mmap_dumb(offset, length);
+        if (result != (uint64_t)-1) return result;
+    }
+
+    /* MAP_SHARED with a memfd (or regular file): share the same physical pages
+     * already backing the VFS node's tar_data buffer so multiple processes
+     * read/write the same physical memory. */
+    if ((flags & 0x01) && fd >= 0 && fd < 100 && open_files[fd] &&
+        fd_kind[fd] == FD_KIND_FILE && open_files[fd]->tar_data) {
+        vfs_node* f = open_files[fd];
+
+        /* Ensure the file is large enough */
+        uint64_t end = offset + length;
+        if (end > f->max_size) {
+            /* grow tar_data */
+            uint8_t* nb = (uint8_t*)kmalloc(end);
+            if (!nb) return (uint64_t)-12;
+            k_memset(nb, 0, end);
+            if (f->tar_data && f->size) k_memcpy(nb, f->tar_data, f->size);
+            kfree(f->tar_data);
+            f->tar_data = nb;
+            f->max_size = (uint32_t)end;
+        }
+        if (end > f->size) f->size = (uint32_t)end;
+
+        /* Map the file pages into the process address space.
+         * tar_data lives in kernel heap — obtain physical addresses. */
+        static uint64_t shm_va = 0x500000000ULL;
+        uint64_t base = shm_va;
+        uint64_t mapped = 0;
+        while (mapped < length) {
+            uint64_t kva = (uint64_t)(f->tar_data + offset + mapped);
+            uint64_t phys = vmm_get_phys(kva);
+            if (!phys) {
+                /* fallback: allocate a new page and identity-copy */
+                void* pg = pmm_alloc_frame();
+                phys = (uint64_t)pg;
+                k_memset((void*)(phys + 0xFFFF800000000000ULL), 0, 4096);
+            }
+            vmm_map_page_ex(current_task->cr3, base + mapped, phys, 0x7);
+            mapped += 4096;
+        }
+        shm_va += length;
+        return base;
+    }
+
+    /* Default: anonymous mapping */
     static uint64_t mmap_ptr = 0x400000000; // Startujemy wysoko
     uint64_t addr = mmap_ptr;
 
@@ -1706,8 +1821,18 @@ uint64_t sys_mprotect(registers* regs) {
 }
 
 uint64_t sys_munmap(registers* regs) {
-    (void)regs->rdi;
-    (void)regs->rsi;
+    uint64_t addr   = regs->rdi;
+    uint64_t length = (regs->rsi + 4095) & ~4095ULL;
+    if (addr == 0 || length == 0) return (uint64_t)-22;
+    /* Unmap pages from the current process page table.
+     * We don't reclaim physical frames here (no reverse mapping yet)
+     * but we clear PTE entries so faults occur on stale access. */
+    for (uint64_t off = 0; off < length; off += 4096) {
+        uint64_t virt = addr + off;
+        /* Map the virt to a null phys with no present bit to invalidate */
+        vmm_map_page_ex(current_task->cr3, virt, 0, 0x0);
+    }
+    asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
     return 0;
 }
 
@@ -1831,13 +1956,138 @@ uint64_t sys_execve(registers* regs) {
 }
 
 
-// --- TABLICA DISPATCHERA ---
-// Uwaga: inicjalizator {sys_not_implemented} ustawia tylko element [0],
-// reszta byłaby wyzerowana. Wypełniamy całość jawnie w init_syscall_table().
+/* ---- mlibc / wlroots additional syscall implementations ---- */
+
+/* timerfd state — minimal stub */
+struct timerfd_state {
+    uint64_t interval_ns;
+    uint64_t value;
+};
+
+static uint64_t sys_timerfd_create(registers* regs) {
+    (void)regs->rdi; /* clockid */
+    (void)regs->rsi; /* flags */
+    int fd = get_free_fd();
+    if (fd < 0) return (uint64_t)-24;
+    timerfd_state* ts = (timerfd_state*)kmalloc(sizeof(timerfd_state));
+    if (!ts) return (uint64_t)-12;
+    k_memset(ts, 0, sizeof(*ts));
+    open_files[fd] = &g_root_dir;
+    fd_kind[fd]    = FD_KIND_TIMER;
+    fd_flags[fd]   = 0;
+    fd_status[fd]  = 0;
+    fd_aux[fd]     = ts;
+    fd_pos[fd]     = 0;
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_timerfd_settime(registers* regs) {
+    int fd = (int)regs->rdi;
+    if (fd < 0 || fd >= 100 || fd_kind[fd] != FD_KIND_TIMER) return (uint64_t)-9;
+    timerfd_state* ts = (timerfd_state*)fd_aux[fd];
+    if (!ts) return (uint64_t)-9;
+    /* struct itimerspec at r10: [it_interval: {sec,nsec}, it_value: {sec,nsec}] */
+    uint64_t* itimerspec = (uint64_t*)regs->r10;
+    if (itimerspec && is_probably_user_ptr(itimerspec)) {
+        ts->interval_ns = itimerspec[0] * 1000000000ULL + itimerspec[1];
+        ts->value       = itimerspec[2] * 1000000000ULL + itimerspec[3];
+    }
+    return 0;
+}
+
+static uint64_t sys_timerfd_gettime(registers* regs) {
+    int fd = (int)regs->rdi;
+    if (fd < 0 || fd >= 100 || fd_kind[fd] != FD_KIND_TIMER) return (uint64_t)-9;
+    /* Write zero itimerspec — timer never fires in this stub */
+    uint64_t* out = (uint64_t*)regs->rsi;
+    if (out && is_probably_user_ptr(out)) {
+        k_memset(out, 0, 32); /* 4 × uint64_t */
+    }
+    return 0;
+}
+
+static uint64_t sys_signalfd4(registers* regs) {
+    (void)regs;
+    int fd = get_free_fd();
+    if (fd < 0) return (uint64_t)-24;
+    open_files[fd] = &g_root_dir;
+    fd_kind[fd]    = FD_KIND_DEV_NULL;
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_inotify_init1(registers* regs) {
+    (void)regs;
+    int fd = get_free_fd();
+    if (fd < 0) return (uint64_t)-24;
+    open_files[fd] = &g_root_dir;
+    fd_kind[fd]    = FD_KIND_DEV_NULL;
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_sched_getaffinity(registers* regs) {
+    (void)regs->rdi; /* pid */
+    uint64_t cpusetsize = regs->rsi;
+    uint8_t* mask       = (uint8_t*)regs->rdx;
+    if (!mask || !is_probably_user_ptr(mask)) return (uint64_t)-14;
+    k_memset(mask, 0, cpusetsize);
+    if (cpusetsize > 0) mask[0] = 1; /* single CPU */
+    return 0;
+}
+
+static uint64_t sys_sched_yield(registers* regs) {
+    (void)regs;
+    return 0;
+}
+
+static uint64_t sys_getrlimit(registers* regs) {
+    (void)regs->rdi; /* resource */
+    uint64_t* rlim = (uint64_t*)regs->rsi;
+    if (!rlim || !is_probably_user_ptr(rlim)) return (uint64_t)-14;
+    rlim[0] = 0x7FFFFFFFFFFFFFFFULL; /* rlim_cur */
+    rlim[1] = 0x7FFFFFFFFFFFFFFFULL; /* rlim_max */
+    return 0;
+}
+
+static uint64_t sys_setrlimit(registers* regs) {
+    (void)regs;
+    return 0;
+}
+
+static uint64_t sys_prctl(registers* regs) {
+    (void)regs;
+    return 0;
+}
+
+static uint64_t sys_arch_prctl_impl(registers* regs) {
+    int code = (int)regs->rdi;
+    uint64_t addr = regs->rsi;
+    /* ARCH_SET_FS = 0x1002 */
+    if (code == 0x1002) {
+        /* Write FS.base MSR so TLS works */
+        uint32_t low  = (uint32_t)(addr & 0xFFFFFFFF);
+        uint32_t high = (uint32_t)(addr >> 32);
+        asm volatile("wrmsr" :: "c"((uint32_t)0xC0000100), "a"(low), "d"(high));
+        return 0;
+    }
+    /* ARCH_GET_FS = 0x1003 */
+    if (code == 0x1003) {
+        uint64_t* out = (uint64_t*)addr;
+        if (!out || !is_probably_user_ptr(out)) return (uint64_t)-14;
+        uint32_t low, high;
+        asm volatile("rdmsr" : "=a"(low), "=d"(high) : "c"((uint32_t)0xC0000100));
+        *out = ((uint64_t)high << 32) | low;
+        return 0;
+    }
+    return 0;
+}
+
+/* --- TABLICA DISPATCHERA --- */
 syscall_fn syscall_table[SYSCALL_TABLE_SIZE];
 
 void init_syscall_table() {
     init_root_dir_node();
+    drm_virt_init();
+    evdev_init();
 
     for (uint64_t i = 0; i < SYSCALL_TABLE_SIZE; ++i) {
         syscall_table[i] = sys_not_implemented;
@@ -1937,6 +2187,19 @@ void init_syscall_table() {
         syscall_table[SYS_AMS_GET_KEY] = sys_ams_get_key;
         syscall_table[SYS_AMS_GET_FB_INFO] = sys_ams_get_fb_info;
         syscall_table[453] = sys_ams_get_mouse_event;
+
+    /* mlibc / wlroots compatibility syscalls */
+    syscall_table[158] = sys_arch_prctl_impl;         /* SYS_ARCH_PRCTL (override stub) */
+    syscall_table[24]  = sys_sched_yield;             /* SYS_SCHED_YIELD */
+    syscall_table[97]  = sys_getrlimit;               /* SYS_GETRLIMIT */
+    syscall_table[160] = sys_setrlimit;               /* SYS_SETRLIMIT */
+    syscall_table[157] = sys_prctl;                   /* SYS_PRCTL */
+    syscall_table[204] = sys_sched_getaffinity;       /* SYS_SCHED_GETAFFINITY */
+    syscall_table[283] = sys_timerfd_create;          /* SYS_TIMERFD_CREATE */
+    syscall_table[286] = sys_timerfd_settime;         /* SYS_TIMERFD_SETTIME */
+    syscall_table[287] = sys_timerfd_gettime;         /* SYS_TIMERFD_GETTIME */
+    syscall_table[289] = sys_signalfd4;               /* SYS_SIGNALFD4 */
+    syscall_table[294] = sys_inotify_init1;           /* SYS_INOTIFY_INIT1 */
 }
 
 // --- GŁÓWNY HANDLER ---

@@ -2,6 +2,9 @@
 #include "io.h"
 #include "task.h"
 #include "gui.h"
+#include "evdev.h"
+
+extern "C" void evdev_push_scancode(uint8_t scancode);
 
 
 volatile bool key_ctrl_pressed = false;
@@ -43,6 +46,9 @@ static void enqueue_key_event(int16_t ev) {
 extern "C" void keyboard_handler(registers* r) {
     (void)r;
     uint8_t scancode = inb(0x60);
+
+    /* Forward raw scancode to evdev layer for /dev/input/event0 */
+    evdev_push_scancode(scancode);
     
     if (scancode < 0x80) {
         if (scancode == 0x38) key_alt_pressed = true;

@@ -96,3 +96,20 @@
 #define SYS_EPOLL_CREATE1 291
 #define SYS_STATX        332
 #define SYS_AMS_GET_MOUSE_EVENT 453
+
+/* Additional mlibc / wlroots syscalls */
+#define SYS_SCHED_YIELD      24
+#define SYS_GETRLIMIT        97
+#define SYS_SETRLIMIT        160
+#define SYS_PRCTL            157
+#define SYS_SCHED_GETAFFINITY 204
+#define SYS_TIMERFD_CREATE   283
+#define SYS_TIMERFD_SETTIME  286
+#define SYS_TIMERFD_GETTIME  287
+#define SYS_SIGNALFD4        289
+#define SYS_INOTIFY_INIT1    294
+
+/* AMS device paths (for userspace reference) */
+#define AMS_DEV_DRI_CARD0   "/dev/dri/card0"
+#define AMS_DEV_INPUT_KBD   "/dev/input/event0"
+#define AMS_DEV_INPUT_PTR   "/dev/input/event1"
