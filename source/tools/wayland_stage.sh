@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAGE_DIR="${ROOT_DIR}/external/wayland-stack"
 WAYLAND_DIR="${STAGE_DIR}/wayland"
 PROTOCOLS_DIR="${STAGE_DIR}/wayland-protocols"
+WLROOTS_DIR="${STAGE_DIR}/wlroots"
 
 mkdir -p "${STAGE_DIR}"
 
@@ -21,7 +22,9 @@ clone_or_update() {
 
 clone_or_update "https://github.com/wayland-mirror/wayland.git" "${WAYLAND_DIR}"
 clone_or_update "https://github.com/wayland-mirror/wayland-protocols.git" "${PROTOCOLS_DIR}"
+clone_or_update "https://gitlab.freedesktop.org/wlroots/wlroots.git" "${WLROOTS_DIR}"
 
 echo "[wayland-stage] repositories ready:"
 echo "  - ${WAYLAND_DIR}"
 echo "  - ${PROTOCOLS_DIR}"
+echo "  - ${WLROOTS_DIR}"

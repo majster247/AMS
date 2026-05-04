@@ -269,9 +269,9 @@ void Desktop::DrawLauncher() {
     graphics_print(x + 20, y + 20, "APPS", COL_NORD8);
     graphics_draw_rect(x + 20, y + 40, menu_w - 40, 2, COL_NORD2);
 
-    const char* apps[] = {"Terminal", "XEyes", "Files", "Video", "Settings", "Doom", "Wayland", "WaylandCli", "WaylandEGL", "Shutdown"};
+    const char* apps[] = {"Terminal", "XEyes", "Files", "Video", "Settings", "Doom", "WaylandCli", "WaylandEGL", "Shutdown"};
     int ty = y + 60;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 9; i++) {
         // Hover effect symulowany (można dodać logikę w Update)
         // Rysujemy "Button" tło
         DrawRoundedRect(x + 20, ty, menu_w - 40, 30, 6, COL_NORD2);
@@ -344,27 +344,20 @@ void Desktop::Update(int mx, int my, bool left_click) {
                         break;
                     }
                     case 6: {
-                        char* wl_argv[2];
-                        wl_argv[0] = (char*)"/programs/wayland/ams-wl-compositor";
-                        wl_argv[1] = nullptr;
-                        launch_user_app("/programs/wayland/ams-wl-compositor", 1, wl_argv);
-                        break;
-                    }
-                    case 7: {
                         char* wlc_argv[2];
                         wlc_argv[0] = (char*)"/programs/wayland/wayland-smoke-client";
                         wlc_argv[1] = nullptr;
                         launch_user_app("/programs/wayland/wayland-smoke-client", 1, wlc_argv);
                         break;
                     }
-                    case 8: {
+                    case 7: {
                         char* wegl_argv[2];
                         wegl_argv[0] = (char*)"/programs/wayland/wayland_egl_smoke";
                         wegl_argv[1] = nullptr;
                         launch_user_app("/programs/wayland/wayland_egl_smoke", 1, wegl_argv);
                         break;
                     }
-                    case 9: start_menu_open = false; break;
+                    case 8: start_menu_open = false; break;
                 }
                 start_menu_open = false;
             }

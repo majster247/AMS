@@ -27,6 +27,9 @@ struct vfs_node {
     struct vfs_node* next;
     //tar_data będzie używane tylko dla plików z initrd, które chcemy móc modyfikować (np. do zapisu skompilowanych plików przez tcc)
     uint8_t* tar_data;
+	// Opcjonalny page-backed storage używany przez MAP_SHARED / memfd / shm_open.
+	uint64_t* shared_frames;
+	uint32_t shared_frame_count;
     uint32_t blocks[15]; 
 };
 

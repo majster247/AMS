@@ -17,8 +17,10 @@
 #define SYS_IOCTL        16
 #define SYS_PREAD64      17
 #define SYS_PWRITE64     18
+#define SYS_UNLINK       87
 #define SYS_GETPEERNAME  52
 #define SYS_GETSOCKNAME  51
+#define SYS_SOCKETPAIR   53
 #define SYS_SHUTDOWN     48
 #define SYS_FTRUNCATE    77
 #define SYS_READV        19

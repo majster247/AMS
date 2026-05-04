@@ -247,6 +247,206 @@ static uint64_t cstrlen(const char* s) {
     return n;
 }
 
+static uint64_t align_up_u64(uint64_t value, uint64_t align) {
+    return (value + align - 1) & ~(align - 1);
+}
+
+static int same_cstr(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    uint64_t i = 0;
+    while (a[i] || b[i]) {
+        if (a[i] != b[i]) return 0;
+        ++i;
+    }
+    return 1;
+}
+
+static void normalize_vfs_lookup_path(const char* in, char* out, size_t out_sz, const char** fallback_name) {
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!in) {
+        if (fallback_name) *fallback_name = out;
+        return;
+    }
+
+    const char* p = in;
+    while (*p == '/') ++p;
+    while (p[0] == '.' && p[1] == '/') p += 2;
+
+    size_t n = 0;
+    while (p[n] && n + 1 < out_sz) {
+        out[n] = p[n];
+        ++n;
+    }
+    out[n] = '\0';
+
+    const char* last = out;
+    for (size_t i = 0; out[i]; ++i) {
+        if (out[i] == '/') last = out + i + 1;
+    }
+    if (fallback_name) *fallback_name = (*last) ? last : out;
+}
+
+static bool ensure_shared_storage(vfs_node* node, uint64_t length);
+
+static uint64_t copy_from_shared_storage(vfs_node* node, uint64_t offset, uint8_t* dst, uint64_t count) {
+    if (!node || !node->shared_frames || !dst) return 0;
+    uint64_t copied = 0;
+    while (copied < count) {
+        uint64_t cur = offset + copied;
+        uint32_t page = (uint32_t)(cur / 4096ULL);
+        if (page >= node->shared_frame_count) break;
+        uint64_t page_off = cur & 0xFFFULL;
+        uint64_t chunk = 4096ULL - page_off;
+        if (chunk > count - copied) chunk = count - copied;
+        uint8_t* src = (uint8_t*)(node->shared_frames[page] + PHYS_OFFSET + page_off);
+        k_memcpy(dst + copied, src, chunk);
+        copied += chunk;
+    }
+    return copied;
+}
+
+static uint64_t zero_shared_storage(vfs_node* node, uint64_t offset, uint64_t count) {
+    if (!node || !node->shared_frames) return 0;
+    uint64_t zeroed = 0;
+    while (zeroed < count) {
+        uint64_t cur = offset + zeroed;
+        uint32_t page = (uint32_t)(cur / 4096ULL);
+        if (page >= node->shared_frame_count) break;
+        uint64_t page_off = cur & 0xFFFULL;
+        uint64_t chunk = 4096ULL - page_off;
+        if (chunk > count - zeroed) chunk = count - zeroed;
+        uint8_t* dst = (uint8_t*)(node->shared_frames[page] + PHYS_OFFSET + page_off);
+        k_memset(dst, 0, chunk);
+        zeroed += chunk;
+    }
+    return zeroed;
+}
+
+static uint64_t copy_to_shared_storage(vfs_node* node, uint64_t offset, const uint8_t* src, uint64_t count) {
+    if (!node || !src) return 0;
+    if (!ensure_shared_storage(node, offset + count)) return 0;
+    uint64_t copied = 0;
+    while (copied < count) {
+        uint64_t cur = offset + copied;
+        uint32_t page = (uint32_t)(cur / 4096ULL);
+        if (page >= node->shared_frame_count) break;
+        uint64_t page_off = cur & 0xFFFULL;
+        uint64_t chunk = 4096ULL - page_off;
+        if (chunk > count - copied) chunk = count - copied;
+        uint8_t* dst = (uint8_t*)(node->shared_frames[page] + PHYS_OFFSET + page_off);
+        k_memcpy(dst, src + copied, chunk);
+        copied += chunk;
+    }
+    return copied;
+}
+
+static bool ensure_shared_storage(vfs_node* node, uint64_t length) {
+    if (!node) return false;
+    if (length == 0) return true;
+
+    uint32_t needed_pages = (uint32_t)(align_up_u64(length, 4096ULL) / 4096ULL);
+    if (needed_pages == 0) needed_pages = 1;
+    if (node->shared_frames && node->shared_frame_count >= needed_pages) return true;
+
+    uint64_t* new_frames = (uint64_t*)kmalloc((size_t)needed_pages * sizeof(uint64_t));
+    if (!new_frames) return false;
+    k_memset(new_frames, 0, (size_t)needed_pages * sizeof(uint64_t));
+
+    uint32_t old_pages = node->shared_frame_count;
+    if (node->shared_frames && old_pages) {
+        k_memcpy(new_frames, node->shared_frames, (size_t)old_pages * sizeof(uint64_t));
+    }
+
+    for (uint32_t i = old_pages; i < needed_pages; ++i) {
+        void* phys = pmm_alloc_frame();
+        if (!phys) {
+            for (uint32_t j = old_pages; j < i; ++j) {
+                if (new_frames[j]) pmm_mark_free(new_frames[j], 4096);
+            }
+            kfree(new_frames);
+            return false;
+        }
+        new_frames[i] = (uint64_t)phys;
+        k_memset((void*)(new_frames[i] + PHYS_OFFSET), 0, 4096);
+    }
+
+    if (!node->shared_frames && node->tar_data && node->size) {
+        uint64_t migrated = copy_to_shared_storage(node, 0, node->tar_data, node->size);
+        if (migrated != node->size) {
+            kfree(new_frames);
+            return false;
+        }
+        kfree(node->tar_data);
+        node->tar_data = nullptr;
+    }
+
+    if (node->shared_frames) kfree(node->shared_frames);
+    node->shared_frames = new_frames;
+    node->shared_frame_count = needed_pages;
+    if (length > node->max_size) node->max_size = (uint32_t)length;
+    return true;
+}
+
+static uint64_t copy_from_node_storage(vfs_node* node, uint64_t offset, uint8_t* dst, uint64_t count) {
+    if (!node || !dst || count == 0) return 0;
+    if (node->shared_frames && node->shared_frame_count) {
+        return copy_from_shared_storage(node, offset, dst, count);
+    }
+    if (node->tar_data) {
+        k_memcpy(dst, node->tar_data + offset, count);
+        return count;
+    }
+    return 0;
+}
+
+static uint64_t copy_to_node_storage(vfs_node* node, uint64_t offset, const uint8_t* src, uint64_t count) {
+    if (!node || !src || count == 0) return 0;
+    if (node->shared_frames && node->shared_frame_count) {
+        return copy_to_shared_storage(node, offset, src, count);
+    }
+    if (!node->tar_data) {
+        uint64_t cap = align_up_u64(offset + count, 4096ULL);
+        if (cap < 4096ULL) cap = 4096ULL;
+        node->tar_data = (uint8_t*)kmalloc((size_t)cap);
+        if (!node->tar_data) return 0;
+        k_memset(node->tar_data, 0, (size_t)cap);
+        node->max_size = (uint32_t)cap;
+    } else if (offset + count > node->max_size) {
+        uint64_t cap = align_up_u64(offset + count, 4096ULL);
+        uint8_t* nb = (uint8_t*)kmalloc((size_t)cap);
+        if (!nb) return 0;
+        k_memset(nb, 0, (size_t)cap);
+        if (node->size) k_memcpy(nb, node->tar_data, node->size);
+        kfree(node->tar_data);
+        node->tar_data = nb;
+        node->max_size = (uint32_t)cap;
+    }
+    k_memcpy(node->tar_data + offset, src, count);
+    return count;
+}
+
+static int unlink_vfs_path(const char* path) {
+    char clean[256];
+    const char* fallback = nullptr;
+    normalize_vfs_lookup_path(path, clean, sizeof(clean), &fallback);
+    if (!clean[0]) return -2;
+
+    vfs_node* prev = nullptr;
+    vfs_node* cur = vfs_root;
+    while (cur) {
+        if (same_cstr(cur->name, clean) || (fallback && fallback[0] && same_cstr(cur->name, fallback))) {
+            if (prev) prev->next = cur->next;
+            else vfs_root = cur->next;
+            cur->next = nullptr;
+            return 0;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+    return -2;
+}
+
 static bool fd_is_readable(int fd) {
     if (fd < 0 || fd >= 100) return false;
     if (fd == 0) return true;
@@ -503,15 +703,9 @@ uint64_t sys_write(registers* regs) {
         return count;
     }
 
-    // Lazy allocation dla nowych plików (jak kupa.o)
-    if (!f->tar_data && f->size == 0) {
-        f->max_size = 512 * 1024;
-        f->tar_data = (uint8_t*)kmalloc(f->max_size);
-        k_memset(f->tar_data, 0, f->max_size);
-    }
-
-    if (fd_pos[fd] + count > f->max_size) count = f->max_size - fd_pos[fd];
-    k_memcpy(f->tar_data + fd_pos[fd], buf, count);
+    uint64_t written = copy_to_node_storage(f, fd_pos[fd], buf, count);
+    if (!written && count) return (uint64_t)-12;
+    count = written;
     fd_pos[fd] += count;
     if (fd_pos[fd] > f->size) f->size = fd_pos[fd];
 
@@ -852,6 +1046,13 @@ uint64_t sys_fcntl(registers* regs) {
     }
 }
 
+uint64_t sys_unlink(registers* regs) {
+    const char* path = (const char*)regs->rdi;
+    char path_buf[256];
+    if (!copy_user_path(path, path_buf, sizeof(path_buf))) return (uint64_t)-14;
+    return (uint64_t)unlink_vfs_path(path_buf);
+}
+
 uint64_t sys_pipe2(registers* regs) {
     int* pipefd = (int*)regs->rdi;
     (void)regs->rsi; // flags
@@ -981,6 +1182,40 @@ uint64_t sys_connect(registers* regs) {
     cli->peer_fd = server_fd;
     srv->connected = true;
     srv->peer_fd = fd;
+    return 0;
+}
+
+uint64_t sys_socketpair(registers* regs) {
+    int domain = (int)regs->rdi;
+    int type = (int)regs->rsi;
+    int* sv = (int*)regs->r10;
+    if (!sv || !is_probably_user_ptr(sv)) return (uint64_t)-14;
+
+    registers s0{};
+    s0.rdi = (uint64_t)domain;
+    s0.rsi = (uint64_t)type;
+    s0.rdx = regs->rdx;
+    uint64_t rc0 = sys_socket(&s0);
+    if ((int64_t)rc0 < 0) return rc0;
+
+    registers s1{};
+    s1.rdi = (uint64_t)domain;
+    s1.rsi = (uint64_t)type;
+    s1.rdx = regs->rdx;
+    uint64_t rc1 = sys_socket(&s1);
+    if ((int64_t)rc1 < 0) {
+        clear_fd_slot((int)rc0);
+        return rc1;
+    }
+
+    int fd0 = (int)rc0;
+    int fd1 = (int)rc1;
+    g_unix_sockets[fd0].connected = true;
+    g_unix_sockets[fd0].peer_fd = fd1;
+    g_unix_sockets[fd1].connected = true;
+    g_unix_sockets[fd1].peer_fd = fd0;
+    sv[0] = fd0;
+    sv[1] = fd1;
     return 0;
 }
 
@@ -1190,23 +1425,23 @@ uint64_t sys_ftruncate(registers* regs) {
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9;
     vfs_node* f = open_files[fd];
     if (f->is_directory) return (uint64_t)-21; // EISDIR
-    if (!f->tar_data) {
-        uint64_t cap = (len > 4096) ? len : 4096;
-        f->tar_data = (uint8_t*)kmalloc(cap);
-        if (!f->tar_data) return (uint64_t)-12;
-        k_memset(f->tar_data, 0, cap);
-        f->max_size = (uint32_t)cap;
+    uint64_t old_size = f->size;
+    if (f->shared_frames || !f->tar_data) {
+        if (len && !ensure_shared_storage(f, len)) return (uint64_t)-12;
+        if (len > old_size) {
+            (void)zero_shared_storage(f, old_size, len - old_size);
+        }
+        f->size = (uint32_t)len;
+        if (len > f->max_size) f->max_size = (uint32_t)len;
+        if (fd_pos[fd] > len) fd_pos[fd] = len;
+        return 0;
     }
-    if (len > f->max_size) {
-        uint8_t* nb = (uint8_t*)kmalloc(len);
-        if (!nb) return (uint64_t)-12;
-        k_memset(nb, 0, len);
-        if (f->size) k_memcpy(nb, f->tar_data, f->size);
-        kfree(f->tar_data);
-        f->tar_data = nb;
-        f->max_size = (uint32_t)len;
-    }
-    if (len > f->size) {
+
+    if (!f->tar_data) return (uint64_t)-12;
+    if (len > f->max_size && !ensure_shared_storage(f, len)) return (uint64_t)-12;
+    if (f->shared_frames) {
+        if (len > old_size) (void)zero_shared_storage(f, old_size, len - old_size);
+    } else if (len > f->size) {
         k_memset(f->tar_data + f->size, 0, len - f->size);
     }
     f->size = (uint32_t)len;
@@ -1238,13 +1473,10 @@ uint64_t sys_memfd_create(registers* regs) {
     k_strcpy(node->name, tmp);
     node->type = FS_FILE;
     node->source = FS_TAR;
-    node->max_size = 4096;
-    node->tar_data = (uint8_t*)kmalloc(node->max_size);
-    if (!node->tar_data) {
-        kfree(node);
-        return (uint64_t)-12;
-    }
-    k_memset(node->tar_data, 0, node->max_size);
+    node->max_size = 0;
+    node->tar_data = nullptr;
+    node->shared_frames = nullptr;
+    node->shared_frame_count = 0;
     node->next = vfs_root;
     vfs_root = node;
 
@@ -1684,19 +1916,43 @@ uint64_t sys_wait4(registers* regs) {
 }
 
 uint64_t sys_mmap(registers* regs) {
+    uint64_t requested = regs->rdi;
     uint64_t length = regs->rsi;
+    uint64_t prot = regs->rdx;
+    uint64_t flags = regs->r10;
+    int fd = (int)regs->r8;
     length = (length + 4095) & ~4095ULL;
+    if (length == 0) return (uint64_t)-22;
     
     static uint64_t mmap_ptr = 0x400000000; // Startujemy wysoko
-    uint64_t addr = mmap_ptr;
+    uint64_t addr = requested ? (requested & ~0xFFFULL) : mmap_ptr;
+    uint64_t page_flags = PAGE_PRESENT | PAGE_USER;
+    if (prot & 0x2) page_flags |= PAGE_WRITABLE;
+
+    const uint64_t MAP_ANONYMOUS = 0x20;
+    bool file_backed = !(flags & MAP_ANONYMOUS) && fd >= 0 && fd < 100 &&
+                       open_files[fd] && fd_kind[fd] == FD_KIND_FILE;
+
+    if (file_backed) {
+        vfs_node* node = open_files[fd];
+        if (!ensure_shared_storage(node, length)) return (uint64_t)-12;
+        for (uint64_t i = 0; i < length; i += 4096) {
+            uint32_t page = (uint32_t)(i / 4096ULL);
+            if (page >= node->shared_frame_count) return (uint64_t)-12;
+            vmm_map_page_ex(current_task->cr3, addr + i, node->shared_frames[page], page_flags);
+        }
+        if (!requested) mmap_ptr += length;
+        return addr;
+    }
 
     for (uint64_t i = 0; i < length; i += 4096) {
         void* phys = pmm_alloc_frame();
-        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7); // USER | WRITABLE | PRESENT
+        if (!phys) return (uint64_t)-12;
+        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, page_flags);
         k_memset((void*)((uint64_t)phys + 0xFFFF800000000000ULL), 0, 4096);
     }
 
-    mmap_ptr += length;
+    if (!requested) mmap_ptr += length;
     return addr;
 }
 
@@ -1856,6 +2112,7 @@ void init_syscall_table() {
     syscall_table[SYS_OPENAT]   = sys_openat;
     syscall_table[SYS_ACCESS]   = sys_access;
     syscall_table[SYS_SOCKET]   = sys_socket;
+    syscall_table[SYS_SOCKETPAIR] = sys_socketpair;
     syscall_table[SYS_SHUTDOWN] = sys_shutdown;
     syscall_table[SYS_GETSOCKNAME] = sys_getsockname;
     syscall_table[SYS_GETPEERNAME] = sys_getpeername;
@@ -1869,6 +2126,7 @@ void init_syscall_table() {
     syscall_table[SYS_DUP]      = sys_dup;
     syscall_table[SYS_DUP2]     = sys_dup2;
     syscall_table[SYS_FCNTL]    = sys_fcntl;
+    syscall_table[SYS_UNLINK]   = sys_unlink;
     syscall_table[SYS_FTRUNCATE] = sys_ftruncate;
     syscall_table[SYS_PIPE2]    = sys_pipe2;
     syscall_table[SYS_GETDENTS64] = sys_getdents64;

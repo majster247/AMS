@@ -9,6 +9,7 @@
 #include "ext2.h"
 #include "idt.h"
 #include "graphics.h"
+#include "drm.h"
 #include "mouse.h"
 #include "gui.h"
 #include "elf.h"
@@ -106,7 +107,7 @@ void enable_sse() {
 extern "C" void run_next_test();
 extern "C" void kernel_return_point();
 extern "C" int sys_exec(const char* path, int argc, char** argv);
-static void launch_wayland_on_boot();
+static void launch_desktop_on_boot();
 
 static void ensure_vfs_placeholder_file(const char* flat_name) {
     if (!flat_name || !flat_name[0]) return;
@@ -134,13 +135,13 @@ static void ensure_vfs_placeholder_file(const char* flat_name) {
 static void launch_compiled_doom_or_fallback() {
     if (!vfs_find("/doom.elf")) {
         write_serial_string("[BOOT] TCC finished but /doom.elf still missing.\n");
-        launch_wayland_on_boot();
+        launch_desktop_on_boot();
         kernel_return_point();
         return;
     }
 
     write_serial_string("[BOOT] /doom.elf built successfully via TCC (autostart disabled).\n");
-    launch_wayland_on_boot();
+    launch_desktop_on_boot();
     kernel_return_point();
 }
 
@@ -181,24 +182,9 @@ static void launch_doom_on_boot() {
     launch_compiled_doom_or_fallback();
 }
 
-static void launch_wayland_on_boot() {
-    char* session_argv[2];
-    session_argv[0] = (char*)"/wayland-session";
-    session_argv[1] = nullptr;
-
-    write_serial_string("[BOOT] Launching Wayland-first session manager...\n");
-
-    if (current_task) {
-        kernel_task = current_task;
-        // Professional mode: do not auto-fall back to legacy GUI.
-        kernel_task->rip = (uint64_t)launch_wayland_on_boot;
-        kernel_task->cr3 = get_cr3();
-    }
-
-    int rc = sys_exec("/wayland-session", 1, session_argv);
-    if (rc != 0) {
-        write_serial_string("[BOOT] Wayland session manager launch failed. Retrying...\n");
-    }
+static void launch_desktop_on_boot() {
+    write_serial_string("[BOOT] Launching desktop fallback without legacy compositor...\n");
+    kernel_return_point();
 }
 
 // Punkt, do którego wracamy po GUI (oryginalny)
@@ -558,8 +544,7 @@ void kmain_post_stack_switch() {
     write_serial_string("[KERNEL] Interrupts enabled.\n");
     write_serial_string("[KERNEL] System reach stable post-stack state.\n");
     
-    // Tryb profesjonalny: Wayland jest jedyną domyślną sesją desktopową.
-    launch_wayland_on_boot();
+    launch_desktop_on_boot();
     while (1) {
         asm volatile("hlt");
     }
@@ -649,6 +634,7 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     }
 
     graphics_init_double_buffer();
+    drm_init();
     main_desktop = new Desktop();
     main_desktop->Init();
     main_desktop->AddWindow(new TerminalWindow(100, 100));

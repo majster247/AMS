@@ -97,6 +97,7 @@ extern "C" {
     uint32_t pmm_get_free_memory_kb();
     bool pmm_is_free(uint64_t addr);
     void pmm_dump_memory_map();
+    void drm_init_from_framebuffer(uint64_t fb_phys, uint32_t width, uint32_t height, uint32_t pitch, uint8_t bpp);
 
 
     extern uint64_t total_ram_bytes;
