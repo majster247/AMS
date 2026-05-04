@@ -168,6 +168,17 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t FD_KIND_DRM = 8;
+static constexpr uint8_t FD_KIND_EVDEV_KBD = 9;
+static constexpr uint8_t FD_KIND_EVDEV_MOUSE = 10;
+
+extern "C" int64_t drm_ams_ioctl(uint64_t request, void* argp);
+extern "C" void    drm_ams_init();
+extern "C" void    evdev_ams_init();
+extern "C" void    evdev_ams_poll();
+extern "C" int     evdev_ams_read(int dev_idx, void* buf, int max_bytes);
+extern "C" bool    evdev_ams_has_events(int dev_idx);
+extern "C" int64_t evdev_ams_ioctl(int dev_idx, uint64_t request, void* argp);
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -264,6 +275,15 @@ static bool fd_is_readable(int fd) {
         eventfd_state* es = (eventfd_state*)fd_aux[fd];
         return es && es->value > 0;
     }
+    if (fd_kind[fd] == FD_KIND_EVDEV_KBD) {
+        evdev_ams_poll();
+        return evdev_ams_has_events(0);
+    }
+    if (fd_kind[fd] == FD_KIND_EVDEV_MOUSE) {
+        evdev_ams_poll();
+        return evdev_ams_has_events(1);
+    }
+    if (fd_kind[fd] == FD_KIND_DRM) return false;
     return true;
 }
 
@@ -430,6 +450,17 @@ uint64_t sys_read(registers* regs) {
         return produced;
     }
 
+    if (fd_kind[fd] == FD_KIND_EVDEV_KBD) {
+        evdev_ams_poll();
+        int n = evdev_ams_read(0, buf, (int)count);
+        return (n > 0) ? (uint64_t)n : (uint64_t)-11; /* EAGAIN if nothing */
+    }
+    if (fd_kind[fd] == FD_KIND_EVDEV_MOUSE) {
+        evdev_ams_poll();
+        int n = evdev_ams_read(1, buf, (int)count);
+        return (n > 0) ? (uint64_t)n : (uint64_t)-11; /* EAGAIN */
+    }
+
     size_t read_bytes = 0;
     if (f->tar_data) {
         uint64_t pos = fd_pos[fd];
@@ -576,6 +607,9 @@ uint64_t sys_open(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_dev_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
+    bool pseudo_evdev_kbd = (strcmp(path_buf, "/dev/input/event0") == 0);
+    bool pseudo_evdev_mouse = (strcmp(path_buf, "/dev/input/event1") == 0);
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -583,7 +617,7 @@ uint64_t sys_open(registers* regs) {
         node = vfs_find(path_buf);
     }
     
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_dev_drm || pseudo_evdev_kbd || pseudo_evdev_mouse) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         // Normalizacja nazwy do "flat VFS basename":
@@ -615,7 +649,12 @@ uint64_t sys_open(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_dev_drm)         fd_kind[fd] = FD_KIND_DRM;
+    else if (pseudo_evdev_kbd)  fd_kind[fd] = FD_KIND_EVDEV_KBD;
+    else if (pseudo_evdev_mouse)fd_kind[fd] = FD_KIND_EVDEV_MOUSE;
+    else if (pseudo_dev_null)   fd_kind[fd] = FD_KIND_DEV_NULL;
+    else if (pseudo_dev_urandom)fd_kind[fd] = FD_KIND_DEV_URANDOM;
+    else                        fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -643,6 +682,9 @@ uint64_t sys_openat(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_dev_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
+    bool pseudo_evdev_kbd = (strcmp(path_buf, "/dev/input/event0") == 0);
+    bool pseudo_evdev_mouse = (strcmp(path_buf, "/dev/input/event1") == 0);
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -650,7 +692,7 @@ uint64_t sys_openat(registers* regs) {
         node = vfs_find(path_buf);
     }
 
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_dev_drm || pseudo_evdev_kbd || pseudo_evdev_mouse) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         const char* normalized = path_buf;
@@ -680,7 +722,12 @@ uint64_t sys_openat(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_dev_drm)         fd_kind[fd] = FD_KIND_DRM;
+    else if (pseudo_evdev_kbd)  fd_kind[fd] = FD_KIND_EVDEV_KBD;
+    else if (pseudo_evdev_mouse)fd_kind[fd] = FD_KIND_EVDEV_MOUSE;
+    else if (pseudo_dev_null)   fd_kind[fd] = FD_KIND_DEV_NULL;
+    else if (pseudo_dev_urandom)fd_kind[fd] = FD_KIND_DEV_URANDOM;
+    else                        fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -795,10 +842,18 @@ uint64_t sys_readlink(registers* regs) {
 
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
+    uint64_t request = regs->rsi;
+    void* argp = (void*)regs->rdx;
     if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
+
+    if (fd_kind[fd] == FD_KIND_DRM)
+        return (uint64_t)drm_ams_ioctl(request, argp);
+    if (fd_kind[fd] == FD_KIND_EVDEV_KBD)
+        return (uint64_t)evdev_ams_ioctl(0, request, argp);
+    if (fd_kind[fd] == FD_KIND_EVDEV_MOUSE)
+        return (uint64_t)evdev_ams_ioctl(1, request, argp);
+
     return (uint64_t)-25; // ENOTTY
 }
 
@@ -1838,6 +1893,8 @@ syscall_fn syscall_table[SYSCALL_TABLE_SIZE];
 
 void init_syscall_table() {
     init_root_dir_node();
+    drm_ams_init();
+    evdev_ams_init();
 
     for (uint64_t i = 0; i < SYSCALL_TABLE_SIZE; ++i) {
         syscall_table[i] = sys_not_implemented;

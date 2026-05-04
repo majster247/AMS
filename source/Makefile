@@ -53,12 +53,18 @@ LIBC_OBJS := build/lib/crt0.o \
              build/lib/ctype.o \
              build/lib/stdio.o \
              build/lib/stubs.o \
-             build/lib/setjmp.o
+             build/lib/setjmp.o \
+             build/lib/posix_extra.o \
+             build/lib/pixman_ams.o \
+             build/lib/libffi_stubs.o \
+             build/lib/libinput_ams.o \
+             build/lib/gbm_ams.o \
+             build/lib/egl_stubs.o
 
 # =============================================================================
 # CELE
 # =============================================================================
-all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf $(ISO_IMAGE) $(DISK_IMAGE)
+all: kernel.elf build/hello.elf build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf build/wlr_ams_demo.elf $(ISO_IMAGE) $(DISK_IMAGE)
 
 # --- KOMPILACJA JĄDRA ---
 
@@ -93,6 +99,14 @@ build/lib/%.o: src/lib/%.s
 build/lib/%.o: src/lib/%.c
 	@mkdir -p build/lib
 	x86_64-elf-gcc $(USER_CFLAGS) -c $< -o $@
+
+build/lib/pixman_ams.o: src/lib/pixman/pixman_ams.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/lib/libinput_ams.o: src/lib/libinput/libinput_ams.c
+	@mkdir -p build/lib
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
 
 # --- KOMPILACJA USER APPS ---
 
@@ -307,8 +321,26 @@ build/bash.elf: build/apps/bash.o $(LIBC_OBJS) src/gui/apps/user.ld
 	@echo "[LINK] Budowanie bash.elf..."
 	$(LD) $(USER_LDFLAGS) build/apps/bash.o $(LIBC_OBJS) -o build/bash.elf
 
+# wlroots AMS backend demo (DRM + evdev + pixman + GBM full-stack test)
+build/apps/wlr_ams_demo.o: src/apps/wayland/wlroots_backend_ams.c
+	@mkdir -p build/apps
+	x86_64-elf-gcc $(USER_CFLAGS) -std=gnu99 -c $< -o $@
+
+build/wlr_ams_demo.elf: build/apps/wlr_ams_demo.o $(LIBC_OBJS) src/gui/apps/user.ld
+	@echo "[LINK] Budowanie wlr_ams_demo.elf..."
+	$(LD) $(USER_LDFLAGS) build/apps/wlr_ams_demo.o $(LIBC_OBJS) -o build/wlr_ams_demo.elf
+
+# wlroots + wayland-scanner staging targets
+wlroots_stage:
+	@echo "[WLROOTS] Cloning/updating wlroots..."
+	@bash tools/wlroots_stage.sh
+
+wayland_scanner_gen: wayland_stage
+	@echo "[SCANNER] Generating protocol headers..."
+	@bash tools/wayland_scanner_stage.sh
+
 # --- OBRAZY ---
-$(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf
+$(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/wayland_egl_smoke.elf build/wayland_compositor.elf build/wayland_smoke_client.elf build/wayland_session.elf build/ams_wayland_shell.elf build/apt.elf build/jobctl.elf build/gcc.elf build/bash.elf build/wlr_ams_demo.elf
 	@echo "[DISK] Budowanie srodowiska testowego..."
 	qemu-img create -f raw $(DISK_IMAGE) $(DISK_SIZE)
 	mkfs.ext2 -b 4096 $(DISK_IMAGE)
@@ -341,6 +373,7 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	sudo cp build/wayland_smoke_client.elf ./temp_mount/programs/wayland/wayland-smoke-client
 	sudo cp build/wayland_session.elf ./temp_mount/programs/wayland/wayland-session
 	sudo cp build/ams_wayland_shell.elf ./temp_mount/programs/wayland/ams-wayland-shell
+	sudo cp build/wlr_ams_demo.elf ./temp_mount/programs/wayland/wlr-ams-demo
 
 	# Narzędzia systemowe
 	sudo cp build/apt.elf ./temp_mount/tools/system/apt
@@ -416,6 +449,7 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	sudo cp build/wayland_smoke_client.elf ./temp_mount/wayland-smoke-client
 	sudo cp build/wayland_smoke.elf ./temp_mount/wayland_smoke
 	sudo cp build/wayland_egl_smoke.elf ./temp_mount/wayland_egl_smoke
+	sudo cp build/wlr_ams_demo.elf ./temp_mount/wlr-ams-demo
 	sudo cp build/doom.elf ./temp_mount/doom.base.elf
 	sudo cp freedoom-0.13.0/freedoom1.wad ./temp_mount/freedoom1.wad
 	
