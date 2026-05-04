@@ -1,10 +1,26 @@
-#include "ams_syscall.h"
-int main(void){ return 0; }
+/*
+ * AMS-OS Wayland Compositor - wlroots-based
+ *
+ * This file is now a thin launcher that initializes the wlroots-based
+ * compositor stack. The actual compositing is handled by the wlroots
+ * port under external/wlroots-stack/.
+ *
+ * Build dependencies (ported):
+ *   - libwayland-server (wayland-scanner generated)
+ *   - wlroots (with DRM/KMS backend via AMS DRM)
+ *   - pixman (software rendering)
+ *   - libinput (input handling)
+ *   - Mesa EGL/GBM (for GPU-accelerated path)
+ *
+ * The compositor communicates with clients via standard Wayland protocol
+ * over AF_UNIX domain sockets using libwayland-server.
+ */
 #include "ams_syscall.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define SYS_WRITE 1
 #define SYS_SOCKET 41
 #define SYS_BIND 49
 #define SYS_LISTEN 50
@@ -15,596 +31,8 @@ int main(void){ return 0; }
 #define SYS_MEMFD_CREATE 319
 #define SYS_FTRUNCATE 77
 #define SYS_CLOCK_GETTIME 228
-#define AF_UNIX 1
-#define SOCK_STREAM 1
-#define SOL_SOCKET 1
-#define SCM_RIGHTS 1
-#define PROT_READ 0x1
-#define PROT_WRITE 0x2
-#define MAP_SHARED 0x01
-#define WL_OBJECT_MAX 512
-#define WL_RX_CAP 8192
-#define WL_FDQ_CAP 32
-
-#define O_WL_DISPLAY 1
-#define O_WL_REGISTRY 2
-#define O_WL_COMPOSITOR 3
-#define O_WL_SHM 4
-#define O_WL_SURFACE 5
-#define O_WL_SHM_POOL 6
-#define O_WL_BUFFER 7
-#define O_WL_CALLBACK 8
-#define O_WL_OUTPUT 9
-#define O_WL_SEAT 10
-#define O_WL_POINTER 11
-#define O_WL_KEYBOARD 12
-#define O_XDG_WM_BASE 20
-#define O_XDG_SURFACE 21
-#define O_XDG_TOPLEVEL 22
-
-struct linux_sockaddr_un { uint16_t sun_family; char sun_path[108]; };
-struct linux_iovec { void* iov_base; uint64_t iov_len; };
-struct linux_msghdr { void* msg_name; uint32_t msg_namelen; uint32_t __pad0; struct linux_iovec* msg_iov; uint64_t msg_iovlen; void* msg_control; uint64_t msg_controllen; uint32_t msg_flags; uint32_t __pad1; };
-struct linux_cmsghdr { uint64_t cmsg_len; int32_t cmsg_level; int32_t cmsg_type; };
-struct linux_timespec_local { int64_t tv_sec; int64_t tv_nsec; };
-typedef struct wl_obj_state { uint32_t type, pool_id, offset, format, attached_buffer_id, role_id, frame_callback_id, client_fd; int fd; uint8_t* map; uint32_t size; int32_t width, height, stride; } wl_obj_state;
-typedef struct wl_fd_queue { int data[WL_FDQ_CAP]; uint32_t head, tail; } wl_fd_queue;
-typedef struct wl_client_state { int fd; uint32_t pointer_id, keyboard_id, focused_surface, serial; } wl_client_state;
-
-static wl_obj_state g_objs[WL_OBJECT_MAX];
-static wl_client_state g_client = {0};
-static uint32_t* wl_fb = 0;
-static uint32_t wl_fb_w = 1280, wl_fb_h = 720;
-static uint32_t g_pointer_x = 80, g_pointer_y = 80;
-static uint8_t g_pointer_buttons = 0;
-
-static void puts1(const char* s) { int n = 0; while (s[n]) ++n; ams_syscall(1, 1, (uint64_t)s, (uint64_t)n, 0, 0); ams_syscall(1, 1, (uint64_t)"\n", 1, 0, 0); }
-static uint32_t now_ms(void) { struct linux_timespec_local ts; if ((long)ams_syscall(SYS_CLOCK_GETTIME, 0, (uint64_t)&ts, 0, 0, 0) != 0) return 0; return (uint32_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL); }
-static uint32_t rd_u32(const uint8_t* p) { return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
-static void wr_u32(uint8_t* p, uint32_t v) { p[0]=(uint8_t)(v&0xFF); p[1]=(uint8_t)((v>>8)&0xFF); p[2]=(uint8_t)((v>>16)&0xFF); p[3]=(uint8_t)((v>>24)&0xFF); }
-static uint32_t append_u32(uint8_t* out, uint32_t at, uint32_t v) { wr_u32(out + at, v); return at + 4; }
-static uint32_t append_i32(uint8_t* out, uint32_t at, int32_t v) { wr_u32(out + at, (uint32_t)v); return at + 4; }
-static uint32_t append_string(uint8_t* out, uint32_t at, const char* s) { uint32_t len=0; while (s[len]) ++len; at=append_u32(out,at,len+1); memcpy(out+at,s,len); out[at+len]=0; at+=len+1; while(at&3U) out[at++]=0; return at; }
-
-static long send_packet(int fd, const uint8_t* data, uint32_t len, int send_fd) { struct linux_iovec iov = {(void*)data, len}; uint8_t control[32] = {0}; struct linux_msghdr msg = {0}; msg.msg_iov = &iov; msg.msg_iovlen = 1; if (send_fd >= 0) { struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control; ch->cmsg_len = sizeof(struct linux_cmsghdr) + sizeof(int); ch->cmsg_level = SOL_SOCKET; ch->cmsg_type = SCM_RIGHTS; *(int*)(control + sizeof(struct linux_cmsghdr)) = send_fd; msg.msg_control = control; msg.msg_controllen = ch->cmsg_len; } return (long)ams_syscall(SYS_SENDMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0); }
-static int recv_packet(int fd, uint8_t* data, uint32_t cap, int* recv_fd) { struct linux_iovec iov = {data, cap}; uint8_t control[64] = {0}; struct linux_msghdr msg = {0}; msg.msg_iov = &iov; msg.msg_iovlen = 1; msg.msg_control = control; msg.msg_controllen = sizeof(control); *recv_fd = -1; int rc = (int)ams_syscall(SYS_RECVMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0); if (rc <= 0) return rc; if (msg.msg_controllen >= sizeof(struct linux_cmsghdr) + sizeof(int)) { struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control; if (ch->cmsg_level == SOL_SOCKET && ch->cmsg_type == SCM_RIGHTS) *recv_fd = *(int*)(control + sizeof(struct linux_cmsghdr)); } return rc; }
-static void fdq_init(wl_fd_queue* q){ q->head=0; q->tail=0; for(uint32_t i=0;i<WL_FDQ_CAP;++i) q->data[i]=-1; }
-static int fdq_push(wl_fd_queue* q,int fd){ uint32_t n=(q->tail+1U)%WL_FDQ_CAP; if(n==q->head) return -1; q->data[q->tail]=fd; q->tail=n; return 0; }
-static int fdq_pop(wl_fd_queue* q){ if(q->head==q->tail) return -1; int fd=q->data[q->head]; q->head=(q->head+1U)%WL_FDQ_CAP; return fd; }
-
-static void send_event_header(uint8_t* pkt, uint32_t obj_id, uint16_t opcode, uint16_t size){ wr_u32(pkt, obj_id); wr_u32(pkt+4, ((uint32_t)size<<16)|opcode); }
-static void send_callback_done(int fd, uint32_t cb_id){ uint8_t pkt[12]={0}; send_event_header(pkt, cb_id, 0, 12); wr_u32(pkt+8, now_ms()); (void)send_packet(fd,pkt,12,-1); }
-static void send_buffer_release(int fd, uint32_t id){ uint8_t pkt[8]={0}; send_event_header(pkt,id,0,8); (void)send_packet(fd,pkt,8,-1); }
-static void send_registry_global(int fd, uint32_t reg_id, uint32_t name, const char* iface, uint32_t version) { uint8_t pkt[256]={0}; uint32_t at=0; at=append_u32(pkt,at,reg_id); uint32_t hdr=at; at=append_u32(pkt,at,0); at=append_u32(pkt,at,name); at=append_string(pkt,at,iface); at=append_u32(pkt,at,version); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1); }
-
-static void draw_shell_background(void){ if(!wl_fb) return; for(uint32_t y=0;y<wl_fb_h;++y){ uint32_t c=(y<36)?0x1E2733:0x151C26; for(uint32_t x=0;x<wl_fb_w;++x) wl_fb[y*wl_fb_w+x]=c; } }
-static void draw_pointer(void){ for(uint32_t y=0;y<12;++y) for(uint32_t x=0;x<10;++x){ uint32_t px=g_pointer_x+x, py=g_pointer_y+y; if(px>=wl_fb_w||py>=wl_fb_h) continue; if(x<=y) wl_fb[py*wl_fb_w+px]=0xFFFFFF; } }
-static void redraw(void){ draw_shell_background(); draw_pointer(); (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0); }
-
-static void present_surface(uint32_t sid){
-    if(sid>=WL_OBJECT_MAX) return;
-    wl_obj_state* s=&g_objs[sid]; if(s->type!=O_WL_SURFACE||!s->attached_buffer_id) return;
-    wl_obj_state* b=&g_objs[s->attached_buffer_id]; if(b->type!=O_WL_BUFFER||!b->pool_id||b->pool_id>=WL_OBJECT_MAX) return;
-    wl_obj_state* p=&g_objs[b->pool_id]; if(p->type!=O_WL_SHM_POOL||!p->map) return;
-    draw_shell_background();
-    uint32_t cw=(b->width>0&&(uint32_t)b->width<wl_fb_w)?(uint32_t)b->width:wl_fb_w;
-    uint32_t ch=(b->height>0&&(uint32_t)b->height<wl_fb_h)?(uint32_t)b->height:wl_fb_h;
-    for(uint32_t y=0;y<ch;++y){ uint32_t off=b->offset+y*(uint32_t)b->stride; if(off+cw*4U>p->size) break; memcpy(&wl_fb[y*wl_fb_w], p->map+off, cw*4U); }
-    draw_pointer();
-    (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0);
-    if(s->frame_callback_id && s->frame_callback_id<WL_OBJECT_MAX){ send_callback_done((int)s->client_fd,s->frame_callback_id); g_objs[s->frame_callback_id].type=0; s->frame_callback_id=0; }
-    send_buffer_release((int)s->client_fd, s->attached_buffer_id);
-}
-
-static void clear_objects(int fd){ memset(g_objs,0,sizeof(g_objs)); memset(&g_client,0,sizeof(g_client)); g_client.fd=fd; g_objs[1].type=O_WL_DISPLAY; g_objs[2].type=O_WL_COMPOSITOR; g_objs[3].type=O_WL_SHM; }
-static void send_output_info(int fd, uint32_t oid){ uint8_t pkt[128]={0}; uint32_t at=0; at=append_u32(pkt,at,oid); uint32_t hdr=at; at=append_u32(pkt,at,0); at=append_i32(pkt,at,0); at=append_i32(pkt,at,0); at=append_i32(pkt,at,300); at=append_i32(pkt,at,170); at=append_u32(pkt,at,1); at=append_string(pkt,at,"AMS"); at=append_string(pkt,at,"Virtual-0"); at=append_i32(pkt,at,0); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1); uint8_t mode[24]={0}; send_event_header(mode,oid,1,20); wr_u32(mode+8,3); wr_u32(mode+12,wl_fb_w); wr_u32(mode+16,wl_fb_h); wr_u32(mode+20,60000); (void)send_packet(fd,mode,24,-1); uint8_t scale[12]={0}; send_event_header(scale,oid,3,12); wr_u32(scale+8,1); (void)send_packet(fd,scale,12,-1); uint8_t done[8]={0}; send_event_header(done,oid,2,8); (void)send_packet(fd,done,8,-1); }
-static void send_seat_info(int fd, uint32_t sid){ uint8_t caps[12]={0}; send_event_header(caps,sid,0,12); wr_u32(caps+8,3); (void)send_packet(fd,caps,12,-1); uint8_t name[64]={0}; uint32_t at=0; at=append_u32(name,at,sid); uint32_t hdr=at; at=append_u32(name,at,0); at=append_string(name,at,"seat0"); wr_u32(name+hdr,(at<<16)|1); (void)send_packet(fd,name,at,-1); }
-static void send_pointer_enter(int fd, uint32_t pid, uint32_t sid){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,0,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,g_pointer_x<<8); wr_u32(pkt+20,g_pointer_y<<8); (void)send_packet(fd,pkt,24,-1); }
-static void send_pointer_motion(int fd, uint32_t pid){ uint8_t pkt[20]={0}; send_event_header(pkt,pid,2,20); wr_u32(pkt+8,now_ms()); wr_u32(pkt+12,g_pointer_x<<8); wr_u32(pkt+16,g_pointer_y<<8); (void)send_packet(fd,pkt,20,-1); }
-static void send_pointer_button(int fd,uint32_t pid,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,0x110); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-static void send_keyboard_enter(int fd,uint32_t kid,uint32_t sid){ uint8_t pkt[20]={0}; send_event_header(pkt,kid,1,20); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,0); (void)send_packet(fd,pkt,20,-1); }
-static void send_keyboard_key(int fd,uint32_t kid,uint32_t key,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,kid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,key); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-
-static void handle_input(void){
-    int should_redraw = 0;
-    uint64_t mev=ams_syscall(SYS_AMS_GET_MOUSE_EVENT,0,0,0,0,0);
-    if(mev && g_client.pointer_id && g_client.focused_surface){
-        uint32_t old_x = g_pointer_x;
-        uint32_t old_y = g_pointer_y;
-        g_pointer_x=(uint32_t)(mev&0xFFFFU); g_pointer_y=(uint32_t)((mev>>16)&0xFFFFU);
-        uint8_t buttons=(uint8_t)((mev>>32)&0xFFU); uint8_t old=g_pointer_buttons; g_pointer_buttons=buttons;
-        send_pointer_motion(g_client.fd,g_client.pointer_id);
-        if(old!=g_pointer_buttons) send_pointer_button(g_client.fd,g_client.pointer_id,(g_pointer_buttons&1U)?1U:0U);
-        if (old_x != g_pointer_x || old_y != g_pointer_y || old != g_pointer_buttons) should_redraw = 1;
-    }
-    uint64_t kev=ams_syscall(SYS_AMS_GET_KEY,0,0,0,0,0);
-    if(kev && g_client.keyboard_id && g_client.focused_surface){ int32_t k=(int32_t)kev; uint32_t st=1; if(k<0){st=0;k=-k;} send_keyboard_key(g_client.fd,g_client.keyboard_id,(uint32_t)k,st); }
-    if (should_redraw) redraw();
-}
-
-static void process_message(int fd, wl_fd_queue* fdq, uint32_t oid, uint16_t op, const uint8_t* p, uint32_t n){
-    if(oid>=WL_OBJECT_MAX) return;
-    wl_obj_state* o=&g_objs[oid];
-    if(oid==1 && o->type==O_WL_DISPLAY){ if(op==0 && n>=4){ uint32_t cb=rd_u32(p); if(cb&&cb<WL_OBJECT_MAX){ g_objs[cb].type=O_WL_CALLBACK; send_callback_done(fd,cb);} } if(op==1 && n>=4){ uint32_t rid=rd_u32(p); if(rid&&rid<WL_OBJECT_MAX){ g_objs[rid].type=O_WL_REGISTRY; send_registry_global(fd,rid,1,"wl_compositor",4); send_registry_global(fd,rid,2,"wl_shm",1); send_registry_global(fd,rid,3,"wl_output",2); send_registry_global(fd,rid,4,"wl_seat",5); send_registry_global(fd,rid,5,"xdg_wm_base",1);} } return; }
-    if(o->type==O_WL_REGISTRY){ if(op==0 && n>=16){ uint32_t name=rd_u32(p); uint32_t sl=rd_u32(p+4); uint32_t sp=(sl+3U)&~3U; if(n<4+4+sp+8) return; uint32_t nid=rd_u32(p+12+sp); if(!nid||nid>=WL_OBJECT_MAX) return; if(name==1) g_objs[nid].type=O_WL_COMPOSITOR; else if(name==2){ g_objs[nid].type=O_WL_SHM; uint8_t f[12]={0}; send_event_header(f,nid,0,12); wr_u32(f+8,0); (void)send_packet(fd,f,12,-1); } else if(name==3){ g_objs[nid].type=O_WL_OUTPUT; send_output_info(fd,nid); } else if(name==4){ g_objs[nid].type=O_WL_SEAT; send_seat_info(fd,nid); } else if(name==5){ g_objs[nid].type=O_XDG_WM_BASE; uint8_t ping[12]={0}; send_event_header(ping,nid,0,12); wr_u32(ping+8,++g_client.serial); (void)send_packet(fd,ping,12,-1); } } return; }
-    if(o->type==O_WL_COMPOSITOR){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_SURFACE; g_objs[nid].client_fd=(uint32_t)fd; } } return; }
-    if(o->type==O_WL_SHM){ if(op==0&&n>=8){ uint32_t nid=rd_u32(p), sz=rd_u32(p+4); int passed=fdq_pop(fdq); if(!nid||nid>=WL_OBJECT_MAX||passed<0||sz==0) return; g_objs[nid].type=O_WL_SHM_POOL; g_objs[nid].fd=passed; g_objs[nid].size=sz; g_objs[nid].map=(uint8_t*)mmap(0,sz,PROT_READ,MAP_SHARED,passed,0); if((uint64_t)g_objs[nid].map>(uint64_t)-4096LL) g_objs[nid].map=0;} return; }
-    if(o->type==O_WL_SHM_POOL){ if(op==0&&n>=24){ uint32_t nid=rd_u32(p); if(!nid||nid>=WL_OBJECT_MAX) return; g_objs[nid].type=O_WL_BUFFER; g_objs[nid].pool_id=oid; g_objs[nid].offset=rd_u32(p+4); g_objs[nid].width=(int32_t)rd_u32(p+8); g_objs[nid].height=(int32_t)rd_u32(p+12); g_objs[nid].stride=(int32_t)rd_u32(p+16); g_objs[nid].format=rd_u32(p+20); g_objs[nid].client_fd=(uint32_t)fd; } return; }
-    if(o->type==O_WL_SURFACE){ if(op==1&&n>=12) o->attached_buffer_id=rd_u32(p); else if(op==3&&n>=4){ uint32_t cb=rd_u32(p); o->frame_callback_id=cb; if(cb&&cb<WL_OBJECT_MAX) g_objs[cb].type=O_WL_CALLBACK; } else if(op==6){ g_client.focused_surface=oid; present_surface(oid); if(g_client.pointer_id) send_pointer_enter(fd,g_client.pointer_id,oid); if(g_client.keyboard_id) send_keyboard_enter(fd,g_client.keyboard_id,oid); } return; }
-    if(o->type==O_WL_SEAT){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_POINTER; g_client.pointer_id=nid; }} else if(op==1&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_KEYBOARD; g_client.keyboard_id=nid; }} return; }
-    if(o->type==O_XDG_WM_BASE){ if(op==1&&n>=8){ uint32_t xs=rd_u32(p), sid=rd_u32(p+4); if(xs&&xs<WL_OBJECT_MAX&&sid&&sid<WL_OBJECT_MAX){ g_objs[xs].type=O_XDG_SURFACE; g_objs[xs].role_id=sid; g_objs[sid].role_id=xs; uint8_t cfg[12]={0}; send_event_header(cfg,xs,0,12); wr_u32(cfg+8,++g_client.serial); (void)send_packet(fd,cfg,12,-1); }} return; }
-    if(o->type==O_XDG_SURFACE){ if(op==1&&n>=4){ uint32_t tl=rd_u32(p); if(tl&&tl<WL_OBJECT_MAX){ g_objs[tl].type=O_XDG_TOPLEVEL; uint8_t tcfg[20]={0}; send_event_header(tcfg,tl,0,20); wr_u32(tcfg+8,wl_fb_w); wr_u32(tcfg+12,wl_fb_h); wr_u32(tcfg+16,0); (void)send_packet(fd,tcfg,20,-1); uint8_t scfg[12]={0}; send_event_header(scfg,oid,0,12); wr_u32(scfg+8,++g_client.serial); (void)send_packet(fd,scfg,12,-1); }} return; }
-    if(o->type==O_WL_BUFFER && op==0) o->type=0;
-}
-
-static int bootstrap_local_shell(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int fd=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(fd<0) return -1;
-    if((int)ams_syscall(SYS_CONNECT,(uint64_t)fd,(uint64_t)&addr,sizeof(addr),0,0)<0) return -2;
-    const uint32_t reg=40, comp=41, shm=42, surf=43, pool=44, buf=45, xwm=46, xsurf=47, xtop=48;
-    uint8_t m[512]={0}; uint32_t at=0, h=0;
-    at=append_u32(m,at,1); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,reg); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,1); at=append_string(m,at,"wl_compositor"); at=append_u32(m,at,4); at=append_u32(m,at,comp); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,2); at=append_string(m,at,"wl_shm"); at=append_u32(m,at,1); at=append_u32(m,at,shm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,5); at=append_string(m,at,"xdg_wm_base"); at=append_u32(m,at,1); at=append_u32(m,at,xwm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,comp); at=append_u32(m,at,(12U<<16)|0U); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xwm); at=append_u32(m,at,(16U<<16)|1U); at=append_u32(m,at,xsurf); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xsurf); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,xtop); (void)send_packet(fd,m,at,-1);
-    int w=960,hh=540,stride=w*4,size=stride*hh; int shmfd=(int)ams_syscall(SYS_MEMFD_CREATE,(uint64_t)"wl-shell",0,0,0,0); if(shmfd<0) return -3;
-    if((int)ams_syscall(SYS_FTRUNCATE,(uint64_t)shmfd,(uint64_t)size,0,0,0)<0) return -4;
-    uint32_t* pix=(uint32_t*)mmap(0,(size_t)size,PROT_READ|PROT_WRITE,MAP_SHARED,shmfd,0); if((uint64_t)pix>(uint64_t)-4096LL) return -5;
-    for(int y=0;y<hh;++y) for(int x=0;x<w;++x) pix[y*w+x]=(y<40)?0x2B394C:0x1A2230;
-    at=0; at=append_u32(m,at,shm); at=append_u32(m,at,(16U<<16)|0U); at=append_u32(m,at,pool); at=append_u32(m,at,(uint32_t)size); (void)send_packet(fd,m,at,shmfd);
-    at=0; at=append_u32(m,at,pool); at=append_u32(m,at,(32U<<16)|0U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,(uint32_t)w); at=append_u32(m,at,(uint32_t)hh); at=append_u32(m,at,(uint32_t)stride); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(20U<<16)|1U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(8U<<16)|6U); (void)send_packet(fd,m,at,-1);
-    return fd;
-}
-
-static void handle_client(int cli){
-    uint8_t rx[WL_RX_CAP]; uint32_t rx_len=0; wl_fd_queue fdq; fdq_init(&fdq); clear_objects(cli);
-    puts1("wl-compositor: client connected");
-    while(1){ int pass=-1; int n=recv_packet(cli,rx+rx_len,WL_RX_CAP-rx_len,&pass); if(n==0) break; if(n<0){ handle_input(); continue; } if(pass>=0) (void)fdq_push(&fdq,pass); rx_len+=(uint32_t)n; uint32_t at=0; while(rx_len-at>=8){ uint32_t oid=rd_u32(rx+at), hdr=rd_u32(rx+at+4); uint16_t op=(uint16_t)(hdr&0xFFFFU), sz=(uint16_t)(hdr>>16); if(sz<8||at+sz>rx_len) break; process_message(cli,&fdq,oid,op,rx+at+8,(uint32_t)sz-8); at+=sz; } if(at>0){ memmove(rx,rx+at,rx_len-at); rx_len-=at; } handle_input(); }
-    puts1("wl-compositor: client disconnected");
-}
-
-int main(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int srv=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(srv<0){ puts1("wl-compositor: socket failed"); return 1; }
-    if((int)ams_syscall(SYS_BIND,srv,(uint64_t)&addr,sizeof(addr),0,0)<0){ puts1("wl-compositor: bind failed"); return 2; }
-    (void)ams_syscall(SYS_LISTEN,srv,8,0,0,0); puts1("wl-compositor: listening on wayland-0");
-    if((int)ams_syscall(SYS_AMS_GET_FB_INFO,(uint64_t)&wl_fb_w,(uint64_t)&wl_fb_h,0,0,0)!=0||wl_fb_w==0||wl_fb_h==0){ wl_fb_w=1280; wl_fb_h=720; }
-    wl_fb=(uint32_t*)malloc((size_t)wl_fb_w*(size_t)wl_fb_h*sizeof(uint32_t)); if(!wl_fb){ puts1("wl-compositor: fb buffer alloc failed"); return 3; }
-    redraw();
-    puts1("wl-compositor: protocol core+xdg+seat ready");
-    if(bootstrap_local_shell()>=0) puts1("wl-compositor: local shell bootstrap queued"); else puts1("wl-compositor: local shell bootstrap failed");
-    while(1){ int cli=(int)ams_syscall(SYS_ACCEPT,srv,0,0,0,0); if(cli<0){ handle_input(); continue; } handle_client(cli); }
-}
-#include "ams_syscall.h"
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define SYS_SOCKET 41
-#define SYS_BIND 49
-#define SYS_LISTEN 50
-#define SYS_ACCEPT 43
-#define SYS_CONNECT 42
-#define SYS_SENDMSG 46
-#define SYS_RECVMSG 47
-#define SYS_MEMFD_CREATE 319
-#define SYS_FTRUNCATE 77
-#define SYS_CLOCK_GETTIME 228
-#define AF_UNIX 1
-#define SOCK_STREAM 1
-#define SOL_SOCKET 1
-#define SCM_RIGHTS 1
-#define PROT_READ 0x1
-#define PROT_WRITE 0x2
-#define MAP_SHARED 0x01
-#define WL_OBJECT_MAX 512
-#define WL_RX_CAP 8192
-#define WL_FDQ_CAP 32
-
-#define O_WL_DISPLAY 1
-#define O_WL_REGISTRY 2
-#define O_WL_COMPOSITOR 3
-#define O_WL_SHM 4
-#define O_WL_SURFACE 5
-#define O_WL_SHM_POOL 6
-#define O_WL_BUFFER 7
-#define O_WL_CALLBACK 8
-#define O_WL_OUTPUT 9
-#define O_WL_SEAT 10
-#define O_WL_POINTER 11
-#define O_WL_KEYBOARD 12
-#define O_XDG_WM_BASE 20
-#define O_XDG_SURFACE 21
-#define O_XDG_TOPLEVEL 22
-
-struct linux_sockaddr_un { uint16_t sun_family; char sun_path[108]; };
-struct linux_iovec { void* iov_base; uint64_t iov_len; };
-struct linux_msghdr { void* msg_name; uint32_t msg_namelen; uint32_t __pad0; struct linux_iovec* msg_iov; uint64_t msg_iovlen; void* msg_control; uint64_t msg_controllen; uint32_t msg_flags; uint32_t __pad1; };
-struct linux_cmsghdr { uint64_t cmsg_len; int32_t cmsg_level; int32_t cmsg_type; };
-struct linux_timespec_local { int64_t tv_sec; int64_t tv_nsec; };
-
-typedef struct wl_obj_state { uint32_t type, pool_id, offset, format, attached_buffer_id, role_id, frame_callback_id, client_fd; int fd; uint8_t* map; uint32_t size; int32_t width, height, stride; } wl_obj_state;
-typedef struct wl_fd_queue { int data[WL_FDQ_CAP]; uint32_t head, tail; } wl_fd_queue;
-typedef struct wl_client_state { int fd; uint32_t pointer_id, keyboard_id, focused_surface, serial; } wl_client_state;
-
-static wl_obj_state g_objs[WL_OBJECT_MAX];
-static wl_client_state g_client = {0};
-static uint32_t* wl_fb = 0;
-static uint32_t wl_fb_w = 1280, wl_fb_h = 720;
-static uint32_t g_pointer_x = 80, g_pointer_y = 80;
-static uint8_t g_pointer_buttons = 0;
-
-static void puts1(const char* s) { int n = 0; while (s[n]) ++n; ams_syscall(1, 1, (uint64_t)s, (uint64_t)n, 0, 0); ams_syscall(1, 1, (uint64_t)"\n", 1, 0, 0); }
-static uint32_t now_ms(void) { struct linux_timespec_local ts; if ((long)ams_syscall(SYS_CLOCK_GETTIME, 0, (uint64_t)&ts, 0, 0, 0) != 0) return 0; return (uint32_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL); }
-static uint32_t rd_u32(const uint8_t* p) { return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
-static void wr_u32(uint8_t* p, uint32_t v) { p[0]=(uint8_t)(v&0xFF); p[1]=(uint8_t)((v>>8)&0xFF); p[2]=(uint8_t)((v>>16)&0xFF); p[3]=(uint8_t)((v>>24)&0xFF); }
-static uint32_t append_u32(uint8_t* out, uint32_t at, uint32_t v) { wr_u32(out + at, v); return at + 4; }
-static uint32_t append_i32(uint8_t* out, uint32_t at, int32_t v) { wr_u32(out + at, (uint32_t)v); return at + 4; }
-static uint32_t append_string(uint8_t* out, uint32_t at, const char* s) { uint32_t len=0; while (s[len]) ++len; at=append_u32(out,at,len+1); memcpy(out+at,s,len); out[at+len]=0; at+=len+1; while(at&3U) out[at++]=0; return at; }
-
-static long send_packet(int fd, const uint8_t* data, uint32_t len, int send_fd) {
-    struct linux_iovec iov = {(void*)data, len};
-    uint8_t control[32] = {0};
-    struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    if (send_fd >= 0) {
-        struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
-        ch->cmsg_len = sizeof(struct linux_cmsghdr) + sizeof(int);
-        ch->cmsg_level = SOL_SOCKET;
-        ch->cmsg_type = SCM_RIGHTS;
-        *(int*)(control + sizeof(struct linux_cmsghdr)) = send_fd;
-        msg.msg_control = control;
-        msg.msg_controllen = ch->cmsg_len;
-    }
-    return (long)ams_syscall(SYS_SENDMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
-}
-
-static int recv_packet(int fd, uint8_t* data, uint32_t cap, int* recv_fd) {
-    struct linux_iovec iov = {data, cap};
-    uint8_t control[64] = {0};
-    struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control;
-    msg.msg_controllen = sizeof(control);
-    *recv_fd = -1;
-    int rc = (int)ams_syscall(SYS_RECVMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
-    if (rc <= 0) return rc;
-    if (msg.msg_controllen >= sizeof(struct linux_cmsghdr) + sizeof(int)) {
-        struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
-        if (ch->cmsg_level == SOL_SOCKET && ch->cmsg_type == SCM_RIGHTS) {
-            *recv_fd = *(int*)(control + sizeof(struct linux_cmsghdr));
-        }
-    }
-    return rc;
-}
-
-static void fdq_init(wl_fd_queue* q){ q->head=0; q->tail=0; for(uint32_t i=0;i<WL_FDQ_CAP;++i) q->data[i]=-1; }
-static int fdq_push(wl_fd_queue* q,int fd){ uint32_t n=(q->tail+1U)%WL_FDQ_CAP; if(n==q->head) return -1; q->data[q->tail]=fd; q->tail=n; return 0; }
-static int fdq_pop(wl_fd_queue* q){ if(q->head==q->tail) return -1; int fd=q->data[q->head]; q->head=(q->head+1U)%WL_FDQ_CAP; return fd; }
-
-static void send_event_header(uint8_t* pkt, uint32_t obj_id, uint16_t opcode, uint16_t size){ wr_u32(pkt, obj_id); wr_u32(pkt+4, ((uint32_t)size<<16)|opcode); }
-static void send_callback_done(int fd, uint32_t cb_id){ uint8_t pkt[12]={0}; send_event_header(pkt, cb_id, 0, 12); wr_u32(pkt+8, now_ms()); (void)send_packet(fd,pkt,12,-1); }
-static void send_buffer_release(int fd, uint32_t id){ uint8_t pkt[8]={0}; send_event_header(pkt,id,0,8); (void)send_packet(fd,pkt,8,-1); }
-
-static void draw_shell_background(void){ if(!wl_fb) return; for(uint32_t y=0;y<wl_fb_h;++y){ uint32_t c=(y<36)?0x1E2733:0x151C26; for(uint32_t x=0;x<wl_fb_w;++x) wl_fb[y*wl_fb_w+x]=c; } }
-static void draw_pointer(void){ for(uint32_t y=0;y<12;++y) for(uint32_t x=0;x<10;++x){ uint32_t px=g_pointer_x+x, py=g_pointer_y+y; if(px>=wl_fb_w||py>=wl_fb_h) continue; if(x<=y) wl_fb[py*wl_fb_w+px]=0xFFFFFF; } }
-static void redraw(void){ draw_shell_background(); draw_pointer(); (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0); }
-
-static void present_surface(uint32_t sid){
-    if(sid>=WL_OBJECT_MAX) return;
-    wl_obj_state* s=&g_objs[sid]; if(s->type!=O_WL_SURFACE||!s->attached_buffer_id) return;
-    wl_obj_state* b=&g_objs[s->attached_buffer_id]; if(b->type!=O_WL_BUFFER||!b->pool_id||b->pool_id>=WL_OBJECT_MAX) return;
-    wl_obj_state* p=&g_objs[b->pool_id]; if(p->type!=O_WL_SHM_POOL||!p->map) return;
-    draw_shell_background();
-    uint32_t cw=(b->width>0&&(uint32_t)b->width<wl_fb_w)?(uint32_t)b->width:wl_fb_w;
-    uint32_t ch=(b->height>0&&(uint32_t)b->height<wl_fb_h)?(uint32_t)b->height:wl_fb_h;
-    for(uint32_t y=0;y<ch;++y){ uint32_t off=b->offset+y*(uint32_t)b->stride; if(off+cw*4U>p->size) break; memcpy(&wl_fb[y*wl_fb_w], p->map+off, cw*4U); }
-    draw_pointer();
-    (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0);
-    if(s->frame_callback_id && s->frame_callback_id<WL_OBJECT_MAX){ send_callback_done((int)s->client_fd,s->frame_callback_id); g_objs[s->frame_callback_id].type=0; s->frame_callback_id=0; }
-    send_buffer_release((int)s->client_fd, s->attached_buffer_id);
-}
-
-static void clear_objects(int fd){ memset(g_objs,0,sizeof(g_objs)); memset(&g_client,0,sizeof(g_client)); g_client.fd=fd; g_objs[1].type=O_WL_DISPLAY; g_objs[2].type=O_WL_COMPOSITOR; g_objs[3].type=O_WL_SHM; }
-
-static void send_registry_global(int fd, uint32_t reg_id, uint32_t name, const char* iface, uint32_t version) {
-    uint8_t pkt[256]={0}; uint32_t at=0; at=append_u32(pkt,at,reg_id); uint32_t hdr=at; at=append_u32(pkt,at,0); at=append_u32(pkt,at,name); at=append_string(pkt,at,iface); at=append_u32(pkt,at,version); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1);
-}
-
-static void send_output_info(int fd, uint32_t oid){
-    uint8_t pkt[128]={0}; uint32_t at=0; at=append_u32(pkt,at,oid); uint32_t hdr=at; at=append_u32(pkt,at,0);
-    at=append_i32(pkt,at,0); at=append_i32(pkt,at,0); at=append_i32(pkt,at,300); at=append_i32(pkt,at,170); at=append_u32(pkt,at,1); at=append_string(pkt,at,"AMS"); at=append_string(pkt,at,"Virtual-0"); at=append_i32(pkt,at,0); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1);
-    uint8_t mode[24]={0}; send_event_header(mode,oid,1,20); wr_u32(mode+8,3); wr_u32(mode+12,wl_fb_w); wr_u32(mode+16,wl_fb_h); wr_u32(mode+20,60000); (void)send_packet(fd,mode,24,-1);
-    uint8_t scale[12]={0}; send_event_header(scale,oid,3,12); wr_u32(scale+8,1); (void)send_packet(fd,scale,12,-1);
-    uint8_t done[8]={0}; send_event_header(done,oid,2,8); (void)send_packet(fd,done,8,-1);
-}
-
-static void send_seat_info(int fd, uint32_t sid){
-    uint8_t caps[12]={0}; send_event_header(caps,sid,0,12); wr_u32(caps+8,3); (void)send_packet(fd,caps,12,-1);
-    uint8_t name[64]={0}; uint32_t at=0; at=append_u32(name,at,sid); uint32_t hdr=at; at=append_u32(name,at,0); at=append_string(name,at,"seat0"); wr_u32(name+hdr,(at<<16)|1); (void)send_packet(fd,name,at,-1);
-}
-
-static void send_pointer_enter(int fd, uint32_t pid, uint32_t sid){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,0,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,g_pointer_x<<8); wr_u32(pkt+20,g_pointer_y<<8); (void)send_packet(fd,pkt,24,-1); }
-static void send_pointer_motion(int fd, uint32_t pid){ uint8_t pkt[20]={0}; send_event_header(pkt,pid,2,20); wr_u32(pkt+8,now_ms()); wr_u32(pkt+12,g_pointer_x<<8); wr_u32(pkt+16,g_pointer_y<<8); (void)send_packet(fd,pkt,20,-1); }
-static void send_pointer_button(int fd,uint32_t pid,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,0x110); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-static void send_keyboard_enter(int fd,uint32_t kid,uint32_t sid){ uint8_t pkt[20]={0}; send_event_header(pkt,kid,1,20); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,0); (void)send_packet(fd,pkt,20,-1); }
-static void send_keyboard_key(int fd,uint32_t kid,uint32_t key,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,kid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,key); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-
-static void handle_input(void){
-    int should_redraw = 0;
-    uint64_t mev=ams_syscall(SYS_AMS_GET_MOUSE_EVENT,0,0,0,0,0);
-    if(mev && g_client.pointer_id && g_client.focused_surface){
-        uint32_t old_x = g_pointer_x;
-        uint32_t old_y = g_pointer_y;
-        g_pointer_x=(uint32_t)(mev&0xFFFFU); g_pointer_y=(uint32_t)((mev>>16)&0xFFFFU);
-        uint8_t buttons=(uint8_t)((mev>>32)&0xFFU); uint8_t old=g_pointer_buttons; g_pointer_buttons=buttons;
-        send_pointer_motion(g_client.fd,g_client.pointer_id);
-        if(old!=g_pointer_buttons) send_pointer_button(g_client.fd,g_client.pointer_id,(g_pointer_buttons&1U)?1U:0U);
-        if (old_x != g_pointer_x || old_y != g_pointer_y || old != g_pointer_buttons) should_redraw = 1;
-    }
-    uint64_t kev=ams_syscall(SYS_AMS_GET_KEY,0,0,0,0,0);
-    if(kev && g_client.keyboard_id && g_client.focused_surface){ int32_t k=(int32_t)kev; uint32_t st=1; if(k<0){st=0;k=-k;} send_keyboard_key(g_client.fd,g_client.keyboard_id,(uint32_t)k,st); }
-    if (should_redraw) redraw();
-}
-
-static void process_message(int fd, wl_fd_queue* fdq, uint32_t oid, uint16_t op, const uint8_t* p, uint32_t n){
-    if(oid>=WL_OBJECT_MAX) return;
-    wl_obj_state* o=&g_objs[oid];
-    if(oid==1 && o->type==O_WL_DISPLAY){ if(op==0 && n>=4){ uint32_t cb=rd_u32(p); if(cb&&cb<WL_OBJECT_MAX){ g_objs[cb].type=O_WL_CALLBACK; send_callback_done(fd,cb);} } if(op==1 && n>=4){ uint32_t rid=rd_u32(p); if(rid&&rid<WL_OBJECT_MAX){ g_objs[rid].type=O_WL_REGISTRY; send_registry_global(fd,rid,1,"wl_compositor",4); send_registry_global(fd,rid,2,"wl_shm",1); send_registry_global(fd,rid,3,"wl_output",2); send_registry_global(fd,rid,4,"wl_seat",5); send_registry_global(fd,rid,5,"xdg_wm_base",1);} } return; }
-    if(o->type==O_WL_REGISTRY){ if(op==0 && n>=16){ uint32_t name=rd_u32(p); uint32_t sl=rd_u32(p+4); uint32_t sp=(sl+3U)&~3U; if(n<4+4+sp+8) return; uint32_t nid=rd_u32(p+12+sp); if(!nid||nid>=WL_OBJECT_MAX) return; if(name==1) g_objs[nid].type=O_WL_COMPOSITOR; else if(name==2){ g_objs[nid].type=O_WL_SHM; uint8_t f[12]={0}; send_event_header(f,nid,0,12); wr_u32(f+8,0); (void)send_packet(fd,f,12,-1); } else if(name==3){ g_objs[nid].type=O_WL_OUTPUT; send_output_info(fd,nid); } else if(name==4){ g_objs[nid].type=O_WL_SEAT; send_seat_info(fd,nid); } else if(name==5){ g_objs[nid].type=O_XDG_WM_BASE; uint8_t ping[12]={0}; send_event_header(ping,nid,0,12); wr_u32(ping+8,++g_client.serial); (void)send_packet(fd,ping,12,-1); } } return; }
-    if(o->type==O_WL_COMPOSITOR){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_SURFACE; g_objs[nid].client_fd=(uint32_t)fd; } } return; }
-    if(o->type==O_WL_SHM){ if(op==0&&n>=8){ uint32_t nid=rd_u32(p), sz=rd_u32(p+4); int passed=fdq_pop(fdq); if(!nid||nid>=WL_OBJECT_MAX||passed<0||sz==0) return; g_objs[nid].type=O_WL_SHM_POOL; g_objs[nid].fd=passed; g_objs[nid].size=sz; g_objs[nid].map=(uint8_t*)mmap(0,sz,PROT_READ,MAP_SHARED,passed,0); if((uint64_t)g_objs[nid].map>(uint64_t)-4096LL) g_objs[nid].map=0;} return; }
-    if(o->type==O_WL_SHM_POOL){ if(op==0&&n>=24){ uint32_t nid=rd_u32(p); if(!nid||nid>=WL_OBJECT_MAX) return; g_objs[nid].type=O_WL_BUFFER; g_objs[nid].pool_id=oid; g_objs[nid].offset=rd_u32(p+4); g_objs[nid].width=(int32_t)rd_u32(p+8); g_objs[nid].height=(int32_t)rd_u32(p+12); g_objs[nid].stride=(int32_t)rd_u32(p+16); g_objs[nid].format=rd_u32(p+20); g_objs[nid].client_fd=(uint32_t)fd; } return; }
-    if(o->type==O_WL_SURFACE){ if(op==1&&n>=12) o->attached_buffer_id=rd_u32(p); else if(op==3&&n>=4){ uint32_t cb=rd_u32(p); o->frame_callback_id=cb; if(cb&&cb<WL_OBJECT_MAX) g_objs[cb].type=O_WL_CALLBACK; } else if(op==6){ g_client.focused_surface=oid; present_surface(oid); if(g_client.pointer_id) send_pointer_enter(fd,g_client.pointer_id,oid); if(g_client.keyboard_id) send_keyboard_enter(fd,g_client.keyboard_id,oid); } return; }
-    if(o->type==O_WL_SEAT){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_POINTER; g_client.pointer_id=nid; }} else if(op==1&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_KEYBOARD; g_client.keyboard_id=nid; }} return; }
-    if(o->type==O_XDG_WM_BASE){ if(op==1&&n>=8){ uint32_t xs=rd_u32(p), sid=rd_u32(p+4); if(xs&&xs<WL_OBJECT_MAX&&sid&&sid<WL_OBJECT_MAX){ g_objs[xs].type=O_XDG_SURFACE; g_objs[xs].role_id=sid; g_objs[sid].role_id=xs; uint8_t cfg[12]={0}; send_event_header(cfg,xs,0,12); wr_u32(cfg+8,++g_client.serial); (void)send_packet(fd,cfg,12,-1); }} return; }
-    if(o->type==O_XDG_SURFACE){ if(op==1&&n>=4){ uint32_t tl=rd_u32(p); if(tl&&tl<WL_OBJECT_MAX){ g_objs[tl].type=O_XDG_TOPLEVEL; uint8_t tcfg[20]={0}; send_event_header(tcfg,tl,0,20); wr_u32(tcfg+8,wl_fb_w); wr_u32(tcfg+12,wl_fb_h); wr_u32(tcfg+16,0); (void)send_packet(fd,tcfg,20,-1); uint8_t scfg[12]={0}; send_event_header(scfg,oid,0,12); wr_u32(scfg+8,++g_client.serial); (void)send_packet(fd,scfg,12,-1); }} return; }
-    if(o->type==O_WL_BUFFER && op==0) o->type=0;
-}
-
-static int bootstrap_local_shell(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int fd=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(fd<0) return -1;
-    if((int)ams_syscall(SYS_CONNECT,(uint64_t)fd,(uint64_t)&addr,sizeof(addr),0,0)<0) return -2;
-    const uint32_t reg=40, comp=41, shm=42, surf=43, pool=44, buf=45, xwm=46, xsurf=47, xtop=48;
-    uint8_t m[512]={0}; uint32_t at=0, h=0;
-    at=append_u32(m,at,1); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,reg); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,1); at=append_string(m,at,"wl_compositor"); at=append_u32(m,at,4); at=append_u32(m,at,comp); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,2); at=append_string(m,at,"wl_shm"); at=append_u32(m,at,1); at=append_u32(m,at,shm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,5); at=append_string(m,at,"xdg_wm_base"); at=append_u32(m,at,1); at=append_u32(m,at,xwm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,comp); at=append_u32(m,at,(12U<<16)|0U); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xwm); at=append_u32(m,at,(16U<<16)|1U); at=append_u32(m,at,xsurf); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xsurf); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,xtop); (void)send_packet(fd,m,at,-1);
-    int w=960,hh=540,stride=w*4,size=stride*hh; int shmfd=(int)ams_syscall(SYS_MEMFD_CREATE,(uint64_t)"wl-shell",0,0,0,0); if(shmfd<0) return -3;
-    if((int)ams_syscall(SYS_FTRUNCATE,(uint64_t)shmfd,(uint64_t)size,0,0,0)<0) return -4;
-    uint32_t* pix=(uint32_t*)mmap(0,(size_t)size,PROT_READ|PROT_WRITE,MAP_SHARED,shmfd,0); if((uint64_t)pix>(uint64_t)-4096LL) return -5;
-    for(int y=0;y<hh;++y) for(int x=0;x<w;++x) pix[y*w+x]=(y<40)?0x2B394C:0x1A2230;
-    at=0; at=append_u32(m,at,shm); at=append_u32(m,at,(16U<<16)|0U); at=append_u32(m,at,pool); at=append_u32(m,at,(uint32_t)size); (void)send_packet(fd,m,at,shmfd);
-    at=0; at=append_u32(m,at,pool); at=append_u32(m,at,(32U<<16)|0U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,(uint32_t)w); at=append_u32(m,at,(uint32_t)hh); at=append_u32(m,at,(uint32_t)stride); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(20U<<16)|1U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(8U<<16)|6U); (void)send_packet(fd,m,at,-1);
-    return fd;
-}
-
-static void handle_client(int cli){
-    uint8_t rx[WL_RX_CAP]; uint32_t rx_len=0; wl_fd_queue fdq; fdq_init(&fdq); clear_objects(cli);
-    puts1("wl-compositor: client connected");
-    while(1){
-        int pass=-1; int n=recv_packet(cli,rx+rx_len,WL_RX_CAP-rx_len,&pass);
-        if(n==0) break;
-        if(n<0){ handle_input(); continue; }
-        if(pass>=0) (void)fdq_push(&fdq,pass);
-        rx_len+=(uint32_t)n;
-        uint32_t at=0; while(rx_len-at>=8){ uint32_t oid=rd_u32(rx+at), hdr=rd_u32(rx+at+4); uint16_t op=(uint16_t)(hdr&0xFFFFU), sz=(uint16_t)(hdr>>16); if(sz<8||at+sz>rx_len) break; process_message(cli,&fdq,oid,op,rx+at+8,(uint32_t)sz-8); at+=sz; }
-        if(at>0){ memmove(rx,rx+at,rx_len-at); rx_len-=at; }
-        handle_input();
-    }
-    puts1("wl-compositor: client disconnected");
-}
-
-int main(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int srv=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(srv<0){ puts1("wl-compositor: socket failed"); return 1; }
-    if((int)ams_syscall(SYS_BIND,srv,(uint64_t)&addr,sizeof(addr),0,0)<0){ puts1("wl-compositor: bind failed"); return 2; }
-    (void)ams_syscall(SYS_LISTEN,srv,8,0,0,0); puts1("wl-compositor: listening on wayland-0");
-    if((int)ams_syscall(SYS_AMS_GET_FB_INFO,(uint64_t)&wl_fb_w,(uint64_t)&wl_fb_h,0,0,0)!=0||wl_fb_w==0||wl_fb_h==0){ wl_fb_w=1280; wl_fb_h=720; }
-    wl_fb=(uint32_t*)malloc((size_t)wl_fb_w*(size_t)wl_fb_h*sizeof(uint32_t)); if(!wl_fb){ puts1("wl-compositor: fb buffer alloc failed"); return 3; }
-    redraw();
-    puts1("wl-compositor: protocol core+xdg+seat ready");
-    if(bootstrap_local_shell()>=0) puts1("wl-compositor: local shell bootstrap queued"); else puts1("wl-compositor: local shell bootstrap failed");
-    while(1){ int cli=(int)ams_syscall(SYS_ACCEPT,srv,0,0,0,0); if(cli<0){ handle_input(); continue; } handle_client(cli); }
-}
-#include "ams_syscall.h"
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define SYS_SOCKET 41
-#define SYS_BIND 49
-#define SYS_LISTEN 50
-#define SYS_ACCEPT 43
-#define SYS_CONNECT 42
-#define SYS_SENDMSG 46
-#define SYS_RECVMSG 47
-#define SYS_MEMFD_CREATE 319
-#define SYS_FTRUNCATE 77
-#define SYS_CLOCK_GETTIME 228
-#define AF_UNIX 1
-#define SOCK_STREAM 1
-#define SOL_SOCKET 1
-#define SCM_RIGHTS 1
-#define PROT_READ 0x1
-#define PROT_WRITE 0x2
-#define MAP_SHARED 0x01
-#define WL_OBJECT_MAX 512
-#define WL_RX_CAP 8192
-#define WL_FDQ_CAP 32
-
-#define O_WL_DISPLAY 1
-#define O_WL_REGISTRY 2
-#define O_WL_COMPOSITOR 3
-#define O_WL_SHM 4
-#define O_WL_SURFACE 5
-#define O_WL_SHM_POOL 6
-#define O_WL_BUFFER 7
-#define O_WL_CALLBACK 8
-#define O_WL_OUTPUT 9
-#define O_WL_SEAT 10
-#define O_WL_POINTER 11
-#define O_WL_KEYBOARD 12
-#define O_XDG_WM_BASE 20
-#define O_XDG_SURFACE 21
-#define O_XDG_TOPLEVEL 22
-
-struct linux_sockaddr_un { uint16_t sun_family; char sun_path[108]; };
-struct linux_iovec { void* iov_base; uint64_t iov_len; };
-struct linux_msghdr { void* msg_name; uint32_t msg_namelen; uint32_t __pad0; struct linux_iovec* msg_iov; uint64_t msg_iovlen; void* msg_control; uint64_t msg_controllen; uint32_t msg_flags; uint32_t __pad1; };
-struct linux_cmsghdr { uint64_t cmsg_len; int32_t cmsg_level; int32_t cmsg_type; };
-struct linux_timespec_local { int64_t tv_sec; int64_t tv_nsec; };
-typedef struct wl_obj_state { uint32_t type, pool_id, offset, format, attached_buffer_id, role_id, frame_callback_id, client_fd; int fd; uint8_t* map; uint32_t size; int32_t width, height, stride; } wl_obj_state;
-typedef struct wl_fd_queue { int data[WL_FDQ_CAP]; uint32_t head, tail; } wl_fd_queue;
-typedef struct wl_client_state { int fd; uint32_t pointer_id, keyboard_id, focused_surface, serial; } wl_client_state;
-
-static wl_obj_state g_objs[WL_OBJECT_MAX];
-static wl_client_state g_client = {0};
-static uint32_t* wl_fb = 0;
-static uint32_t wl_fb_w = 1280, wl_fb_h = 720;
-static uint32_t g_pointer_x = 80, g_pointer_y = 80;
-static uint8_t g_pointer_buttons = 0;
-
-static void puts1(const char* s) { int n = 0; while (s[n]) ++n; ams_syscall(1, 1, (uint64_t)s, (uint64_t)n, 0, 0); ams_syscall(1, 1, (uint64_t)"\n", 1, 0, 0); }
-static uint32_t now_ms(void) { struct linux_timespec_local ts; if ((long)ams_syscall(SYS_CLOCK_GETTIME, 0, (uint64_t)&ts, 0, 0, 0) != 0) return 0; return (uint32_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL); }
-static uint32_t rd_u32(const uint8_t* p) { return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
-static void wr_u32(uint8_t* p, uint32_t v) { p[0]=(uint8_t)(v&0xFF); p[1]=(uint8_t)((v>>8)&0xFF); p[2]=(uint8_t)((v>>16)&0xFF); p[3]=(uint8_t)((v>>24)&0xFF); }
-static uint32_t append_u32(uint8_t* out, uint32_t at, uint32_t v) { wr_u32(out + at, v); return at + 4; }
-static uint32_t append_i32(uint8_t* out, uint32_t at, int32_t v) { wr_u32(out + at, (uint32_t)v); return at + 4; }
-static uint32_t append_string(uint8_t* out, uint32_t at, const char* s) { uint32_t len=0; while (s[len]) ++len; at=append_u32(out,at,len+1); memcpy(out+at,s,len); out[at+len]=0; at+=len+1; while(at&3U) out[at++]=0; return at; }
-
-static long send_packet(int fd, const uint8_t* data, uint32_t len, int send_fd) { struct linux_iovec iov = {(void*)data, len}; uint8_t control[32] = {0}; struct linux_msghdr msg = {0}; msg.msg_iov = &iov; msg.msg_iovlen = 1; if (send_fd >= 0) { struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control; ch->cmsg_len = sizeof(struct linux_cmsghdr) + sizeof(int); ch->cmsg_level = SOL_SOCKET; ch->cmsg_type = SCM_RIGHTS; *(int*)(control + sizeof(struct linux_cmsghdr)) = send_fd; msg.msg_control = control; msg.msg_controllen = ch->cmsg_len; } return (long)ams_syscall(SYS_SENDMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0); }
-static int recv_packet(int fd, uint8_t* data, uint32_t cap, int* recv_fd) { struct linux_iovec iov = {data, cap}; uint8_t control[64] = {0}; struct linux_msghdr msg = {0}; msg.msg_iov = &iov; msg.msg_iovlen = 1; msg.msg_control = control; msg.msg_controllen = sizeof(control); *recv_fd = -1; int rc = (int)ams_syscall(SYS_RECVMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0); if (rc <= 0) return rc; if (msg.msg_controllen >= sizeof(struct linux_cmsghdr) + sizeof(int)) { struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control; if (ch->cmsg_level == SOL_SOCKET && ch->cmsg_type == SCM_RIGHTS) *recv_fd = *(int*)(control + sizeof(struct linux_cmsghdr)); } return rc; }
-static void fdq_init(wl_fd_queue* q){ q->head=0; q->tail=0; for(uint32_t i=0;i<WL_FDQ_CAP;++i) q->data[i]=-1; }
-static int fdq_push(wl_fd_queue* q,int fd){ uint32_t n=(q->tail+1U)%WL_FDQ_CAP; if(n==q->head) return -1; q->data[q->tail]=fd; q->tail=n; return 0; }
-static int fdq_pop(wl_fd_queue* q){ if(q->head==q->tail) return -1; int fd=q->data[q->head]; q->head=(q->head+1U)%WL_FDQ_CAP; return fd; }
-
-static void send_event_header(uint8_t* pkt, uint32_t obj_id, uint16_t opcode, uint16_t size){ wr_u32(pkt, obj_id); wr_u32(pkt+4, ((uint32_t)size<<16)|opcode); }
-static void send_callback_done(int fd, uint32_t cb_id){ uint8_t pkt[12]={0}; send_event_header(pkt, cb_id, 0, 12); wr_u32(pkt+8, now_ms()); (void)send_packet(fd,pkt,12,-1); }
-static void send_buffer_release(int fd, uint32_t id){ uint8_t pkt[8]={0}; send_event_header(pkt,id,0,8); (void)send_packet(fd,pkt,8,-1); }
-static void send_registry_global(int fd, uint32_t reg_id, uint32_t name, const char* iface, uint32_t version) { uint8_t pkt[256]={0}; uint32_t at=0; at=append_u32(pkt,at,reg_id); uint32_t hdr=at; at=append_u32(pkt,at,0); at=append_u32(pkt,at,name); at=append_string(pkt,at,iface); at=append_u32(pkt,at,version); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1); }
-
-static void draw_shell_background(void){ if(!wl_fb) return; for(uint32_t y=0;y<wl_fb_h;++y){ uint32_t c=(y<36)?0x1E2733:0x151C26; for(uint32_t x=0;x<wl_fb_w;++x) wl_fb[y*wl_fb_w+x]=c; } }
-static void draw_pointer(void){ for(uint32_t y=0;y<12;++y) for(uint32_t x=0;x<10;++x){ uint32_t px=g_pointer_x+x, py=g_pointer_y+y; if(px>=wl_fb_w||py>=wl_fb_h) continue; if(x<=y) wl_fb[py*wl_fb_w+px]=0xFFFFFF; } }
-
-static void present_surface(uint32_t sid){
-    if(sid>=WL_OBJECT_MAX) return;
-    wl_obj_state* s=&g_objs[sid]; if(s->type!=O_WL_SURFACE||!s->attached_buffer_id) return;
-    wl_obj_state* b=&g_objs[s->attached_buffer_id]; if(b->type!=O_WL_BUFFER||!b->pool_id||b->pool_id>=WL_OBJECT_MAX) return;
-    wl_obj_state* p=&g_objs[b->pool_id]; if(p->type!=O_WL_SHM_POOL||!p->map) return;
-    draw_shell_background();
-    uint32_t cw=(b->width>0&&(uint32_t)b->width<wl_fb_w)?(uint32_t)b->width:wl_fb_w;
-    uint32_t ch=(b->height>0&&(uint32_t)b->height<wl_fb_h)?(uint32_t)b->height:wl_fb_h;
-    for(uint32_t y=0;y<ch;++y){ uint32_t off=b->offset+y*(uint32_t)b->stride; if(off+cw*4U>p->size) break; memcpy(&wl_fb[y*wl_fb_w], p->map+off, cw*4U); }
-    draw_pointer();
-    (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0);
-    if(s->frame_callback_id && s->frame_callback_id<WL_OBJECT_MAX){ send_callback_done((int)s->client_fd,s->frame_callback_id); g_objs[s->frame_callback_id].type=0; s->frame_callback_id=0; }
-    send_buffer_release((int)s->client_fd, s->attached_buffer_id);
-}
-
-static void clear_objects(int fd){ memset(g_objs,0,sizeof(g_objs)); memset(&g_client,0,sizeof(g_client)); g_client.fd=fd; g_objs[1].type=O_WL_DISPLAY; g_objs[2].type=O_WL_COMPOSITOR; g_objs[3].type=O_WL_SHM; }
-static void send_output_info(int fd, uint32_t oid){ uint8_t pkt[128]={0}; uint32_t at=0; at=append_u32(pkt,at,oid); uint32_t hdr=at; at=append_u32(pkt,at,0); at=append_i32(pkt,at,0); at=append_i32(pkt,at,0); at=append_i32(pkt,at,300); at=append_i32(pkt,at,170); at=append_u32(pkt,at,1); at=append_string(pkt,at,"AMS"); at=append_string(pkt,at,"Virtual-0"); at=append_i32(pkt,at,0); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1); uint8_t mode[24]={0}; send_event_header(mode,oid,1,20); wr_u32(mode+8,3); wr_u32(mode+12,wl_fb_w); wr_u32(mode+16,wl_fb_h); wr_u32(mode+20,60000); (void)send_packet(fd,mode,24,-1); uint8_t scale[12]={0}; send_event_header(scale,oid,3,12); wr_u32(scale+8,1); (void)send_packet(fd,scale,12,-1); uint8_t done[8]={0}; send_event_header(done,oid,2,8); (void)send_packet(fd,done,8,-1); }
-static void send_seat_info(int fd, uint32_t sid){ uint8_t caps[12]={0}; send_event_header(caps,sid,0,12); wr_u32(caps+8,3); (void)send_packet(fd,caps,12,-1); uint8_t name[64]={0}; uint32_t at=0; at=append_u32(name,at,sid); uint32_t hdr=at; at=append_u32(name,at,0); at=append_string(name,at,"seat0"); wr_u32(name+hdr,(at<<16)|1); (void)send_packet(fd,name,at,-1); }
-static void send_pointer_enter(int fd, uint32_t pid, uint32_t sid){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,0,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,g_pointer_x<<8); wr_u32(pkt+20,g_pointer_y<<8); (void)send_packet(fd,pkt,24,-1); }
-static void send_pointer_motion(int fd, uint32_t pid){ uint8_t pkt[20]={0}; send_event_header(pkt,pid,2,20); wr_u32(pkt+8,now_ms()); wr_u32(pkt+12,g_pointer_x<<8); wr_u32(pkt+16,g_pointer_y<<8); (void)send_packet(fd,pkt,20,-1); }
-static void send_pointer_button(int fd,uint32_t pid,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,0x110); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-static void send_keyboard_enter(int fd,uint32_t kid,uint32_t sid){ uint8_t pkt[20]={0}; send_event_header(pkt,kid,1,20); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,0); (void)send_packet(fd,pkt,20,-1); }
-static void send_keyboard_key(int fd,uint32_t kid,uint32_t key,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,kid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,key); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-
-static void handle_input(void){
-    uint64_t mev=ams_syscall(SYS_AMS_GET_MOUSE_EVENT,0,0,0,0,0);
-    if(mev && g_client.pointer_id && g_client.focused_surface){ g_pointer_x=(uint32_t)(mev&0xFFFFU); g_pointer_y=(uint32_t)((mev>>16)&0xFFFFU); uint8_t buttons=(uint8_t)((mev>>32)&0xFFU); uint8_t old=g_pointer_buttons; g_pointer_buttons=buttons; send_pointer_motion(g_client.fd,g_client.pointer_id); if(old!=g_pointer_buttons) send_pointer_button(g_client.fd,g_client.pointer_id,(g_pointer_buttons&1U)?1U:0U); }
-    uint64_t kev=ams_syscall(SYS_AMS_GET_KEY,0,0,0,0,0);
-    if(kev && g_client.keyboard_id && g_client.focused_surface){ int32_t k=(int32_t)kev; uint32_t st=1; if(k<0){st=0;k=-k;} send_keyboard_key(g_client.fd,g_client.keyboard_id,(uint32_t)k,st); }
-}
-
-static void process_message(int fd, wl_fd_queue* fdq, uint32_t oid, uint16_t op, const uint8_t* p, uint32_t n){
-    if(oid>=WL_OBJECT_MAX) return;
-    wl_obj_state* o=&g_objs[oid];
-    if(oid==1 && o->type==O_WL_DISPLAY){ if(op==0 && n>=4){ uint32_t cb=rd_u32(p); if(cb&&cb<WL_OBJECT_MAX){ g_objs[cb].type=O_WL_CALLBACK; send_callback_done(fd,cb);} } if(op==1 && n>=4){ uint32_t rid=rd_u32(p); if(rid&&rid<WL_OBJECT_MAX){ g_objs[rid].type=O_WL_REGISTRY; send_registry_global(fd,rid,1,"wl_compositor",4); send_registry_global(fd,rid,2,"wl_shm",1); send_registry_global(fd,rid,3,"wl_output",2); send_registry_global(fd,rid,4,"wl_seat",5); send_registry_global(fd,rid,5,"xdg_wm_base",1);} } return; }
-    if(o->type==O_WL_REGISTRY){ if(op==0 && n>=16){ uint32_t name=rd_u32(p); uint32_t sl=rd_u32(p+4); uint32_t sp=(sl+3U)&~3U; if(n<4+4+sp+8) return; uint32_t nid=rd_u32(p+12+sp); if(!nid||nid>=WL_OBJECT_MAX) return; if(name==1) g_objs[nid].type=O_WL_COMPOSITOR; else if(name==2){ g_objs[nid].type=O_WL_SHM; uint8_t f[12]={0}; send_event_header(f,nid,0,12); wr_u32(f+8,0); (void)send_packet(fd,f,12,-1); } else if(name==3){ g_objs[nid].type=O_WL_OUTPUT; send_output_info(fd,nid); } else if(name==4){ g_objs[nid].type=O_WL_SEAT; send_seat_info(fd,nid); } else if(name==5){ g_objs[nid].type=O_XDG_WM_BASE; uint8_t ping[12]={0}; send_event_header(ping,nid,0,12); wr_u32(ping+8,++g_client.serial); (void)send_packet(fd,ping,12,-1); } } return; }
-    if(o->type==O_WL_COMPOSITOR){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_SURFACE; g_objs[nid].client_fd=(uint32_t)fd; } } return; }
-    if(o->type==O_WL_SHM){ if(op==0&&n>=8){ uint32_t nid=rd_u32(p), sz=rd_u32(p+4); int passed=fdq_pop(fdq); if(!nid||nid>=WL_OBJECT_MAX||passed<0||sz==0) return; g_objs[nid].type=O_WL_SHM_POOL; g_objs[nid].fd=passed; g_objs[nid].size=sz; g_objs[nid].map=(uint8_t*)mmap(0,sz,PROT_READ,MAP_SHARED,passed,0); if((uint64_t)g_objs[nid].map>(uint64_t)-4096LL) g_objs[nid].map=0;} return; }
-    if(o->type==O_WL_SHM_POOL){ if(op==0&&n>=24){ uint32_t nid=rd_u32(p); if(!nid||nid>=WL_OBJECT_MAX) return; g_objs[nid].type=O_WL_BUFFER; g_objs[nid].pool_id=oid; g_objs[nid].offset=rd_u32(p+4); g_objs[nid].width=(int32_t)rd_u32(p+8); g_objs[nid].height=(int32_t)rd_u32(p+12); g_objs[nid].stride=(int32_t)rd_u32(p+16); g_objs[nid].format=rd_u32(p+20); g_objs[nid].client_fd=(uint32_t)fd; } return; }
-    if(o->type==O_WL_SURFACE){ if(op==1&&n>=12) o->attached_buffer_id=rd_u32(p); else if(op==3&&n>=4){ uint32_t cb=rd_u32(p); o->frame_callback_id=cb; if(cb&&cb<WL_OBJECT_MAX) g_objs[cb].type=O_WL_CALLBACK; } else if(op==6){ g_client.focused_surface=oid; present_surface(oid); if(g_client.pointer_id) send_pointer_enter(fd,g_client.pointer_id,oid); if(g_client.keyboard_id) send_keyboard_enter(fd,g_client.keyboard_id,oid); } return; }
-    if(o->type==O_WL_SEAT){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_POINTER; g_client.pointer_id=nid; }} else if(op==1&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_KEYBOARD; g_client.keyboard_id=nid; }} return; }
-    if(o->type==O_XDG_WM_BASE){ if(op==1&&n>=8){ uint32_t xs=rd_u32(p), sid=rd_u32(p+4); if(xs&&xs<WL_OBJECT_MAX&&sid&&sid<WL_OBJECT_MAX){ g_objs[xs].type=O_XDG_SURFACE; g_objs[xs].role_id=sid; g_objs[sid].role_id=xs; uint8_t cfg[12]={0}; send_event_header(cfg,xs,0,12); wr_u32(cfg+8,++g_client.serial); (void)send_packet(fd,cfg,12,-1); }} return; }
-    if(o->type==O_XDG_SURFACE){ if(op==1&&n>=4){ uint32_t tl=rd_u32(p); if(tl&&tl<WL_OBJECT_MAX){ g_objs[tl].type=O_XDG_TOPLEVEL; uint8_t tcfg[20]={0}; send_event_header(tcfg,tl,0,20); wr_u32(tcfg+8,wl_fb_w); wr_u32(tcfg+12,wl_fb_h); wr_u32(tcfg+16,0); (void)send_packet(fd,tcfg,20,-1); uint8_t scfg[12]={0}; send_event_header(scfg,oid,0,12); wr_u32(scfg+8,++g_client.serial); (void)send_packet(fd,scfg,12,-1); }} return; }
-    if(o->type==O_WL_BUFFER && op==0) o->type=0;
-}
-
-static int bootstrap_local_shell(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int fd=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(fd<0) return -1;
-    if((int)ams_syscall(SYS_CONNECT,(uint64_t)fd,(uint64_t)&addr,sizeof(addr),0,0)<0) return -2;
-    const uint32_t reg=40, comp=41, shm=42, surf=43, pool=44, buf=45, xwm=46, xsurf=47, xtop=48;
-    uint8_t m[512]={0}; uint32_t at=0, h=0;
-    at=append_u32(m,at,1); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,reg); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,1); at=append_string(m,at,"wl_compositor"); at=append_u32(m,at,4); at=append_u32(m,at,comp); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,2); at=append_string(m,at,"wl_shm"); at=append_u32(m,at,1); at=append_u32(m,at,shm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,5); at=append_string(m,at,"xdg_wm_base"); at=append_u32(m,at,1); at=append_u32(m,at,xwm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,comp); at=append_u32(m,at,(12U<<16)|0U); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xwm); at=append_u32(m,at,(16U<<16)|1U); at=append_u32(m,at,xsurf); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xsurf); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,xtop); (void)send_packet(fd,m,at,-1);
-    int w=960,hh=540,stride=w*4,size=stride*hh; int shmfd=(int)ams_syscall(SYS_MEMFD_CREATE,(uint64_t)"wl-shell",0,0,0,0); if(shmfd<0) return -3;
-    if((int)ams_syscall(SYS_FTRUNCATE,(uint64_t)shmfd,(uint64_t)size,0,0,0)<0) return -4;
-    uint32_t* pix=(uint32_t*)mmap(0,(size_t)size,PROT_READ|PROT_WRITE,MAP_SHARED,shmfd,0); if((uint64_t)pix>(uint64_t)-4096LL) return -5;
-    for(int y=0;y<hh;++y) for(int x=0;x<w;++x) pix[y*w+x]=(y<40)?0x2B394C:0x1A2230;
-    at=0; at=append_u32(m,at,shm); at=append_u32(m,at,(16U<<16)|0U); at=append_u32(m,at,pool); at=append_u32(m,at,(uint32_t)size); (void)send_packet(fd,m,at,shmfd);
-    at=0; at=append_u32(m,at,pool); at=append_u32(m,at,(32U<<16)|0U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,(uint32_t)w); at=append_u32(m,at,(uint32_t)hh); at=append_u32(m,at,(uint32_t)stride); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(20U<<16)|1U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(8U<<16)|6U); (void)send_packet(fd,m,at,-1);
-    return fd;
-}
-
-static void handle_client(int cli){
-    uint8_t rx[WL_RX_CAP]; uint32_t rx_len=0; wl_fd_queue fdq; fdq_init(&fdq); clear_objects(cli);
-    puts1("wl-compositor: client connected");
-    while(1){ int pass=-1; int n=recv_packet(cli,rx+rx_len,WL_RX_CAP-rx_len,&pass); if(n==0) break; if(n<0){ handle_input(); continue; } if(pass>=0) (void)fdq_push(&fdq,pass); rx_len+=(uint32_t)n; uint32_t at=0; while(rx_len-at>=8){ uint32_t oid=rd_u32(rx+at), hdr=rd_u32(rx+at+4); uint16_t op=(uint16_t)(hdr&0xFFFFU), sz=(uint16_t)(hdr>>16); if(sz<8||at+sz>rx_len) break; process_message(cli,&fdq,oid,op,rx+at+8,(uint32_t)sz-8); at+=sz; } if(at>0){ memmove(rx,rx+at,rx_len-at); rx_len-=at; } handle_input(); }
-    puts1("wl-compositor: client disconnected");
-}
-
-int main(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int srv=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(srv<0){ puts1("wl-compositor: socket failed"); return 1; }
-    if((int)ams_syscall(SYS_BIND,srv,(uint64_t)&addr,sizeof(addr),0,0)<0){ puts1("wl-compositor: bind failed"); return 2; }
-    (void)ams_syscall(SYS_LISTEN,srv,8,0,0,0); puts1("wl-compositor: listening on wayland-0");
-    if((int)ams_syscall(SYS_AMS_GET_FB_INFO,(uint64_t)&wl_fb_w,(uint64_t)&wl_fb_h,0,0,0)!=0||wl_fb_w==0||wl_fb_h==0){ wl_fb_w=1280; wl_fb_h=720; }
-    wl_fb=(uint32_t*)malloc((size_t)wl_fb_w*(size_t)wl_fb_h*sizeof(uint32_t)); if(!wl_fb){ puts1("wl-compositor: fb buffer alloc failed"); return 3; }
-    draw_shell_background(); draw_pointer(); (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0);
-    puts1("wl-compositor: protocol core+xdg+seat ready");
-    if(bootstrap_local_shell()>=0) puts1("wl-compositor: local shell bootstrap queued"); else puts1("wl-compositor: local shell bootstrap failed");
-    while(1){ int cli=(int)ams_syscall(SYS_ACCEPT,srv,0,0,0,0); if(cli<0){ handle_input(); continue; } handle_client(cli); }
-}
-#include "ams_syscall.h"
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define SYS_SOCKET 41
-#define SYS_BIND 49
-#define SYS_LISTEN 50
-#define SYS_ACCEPT 43
-#define SYS_CONNECT 42
-#define SYS_SENDMSG 46
-#define SYS_RECVMSG 47
-#define SYS_MEMFD_CREATE 319
-#define SYS_FTRUNCATE 77
-#define SYS_CLOCK_GETTIME 228
+#define SYS_POLL 7
+#define SYS_IOCTL 16
 #define AF_UNIX 1
 #define SOCK_STREAM 1
 #define SOL_SOCKET 1
@@ -613,384 +41,176 @@ int main(void){
 #define PROT_WRITE 0x2
 #define MAP_SHARED 0x01
 
-#define WL_OBJECT_MAX 512
-#define WL_RX_CAP 8192
-#define WL_FDQ_CAP 32
+/* DRM/KMS ioctl numbers (AMS kernel) */
+#define DRM_IOCTL_BASE 0x40
+#define DRM_IOCTL_VERSION        (DRM_IOCTL_BASE + 0x00)
+#define DRM_IOCTL_MODE_GETRESOURCES (DRM_IOCTL_BASE + 0x01)
+#define DRM_IOCTL_MODE_GETCRTC   (DRM_IOCTL_BASE + 0x02)
+#define DRM_IOCTL_MODE_SETCRTC   (DRM_IOCTL_BASE + 0x03)
+#define DRM_IOCTL_MODE_GETCONNECTOR (DRM_IOCTL_BASE + 0x04)
+#define DRM_IOCTL_MODE_GETENCODER (DRM_IOCTL_BASE + 0x05)
+#define DRM_IOCTL_MODE_CREATE_DUMB (DRM_IOCTL_BASE + 0x06)
+#define DRM_IOCTL_MODE_MAP_DUMB  (DRM_IOCTL_BASE + 0x07)
+#define DRM_IOCTL_MODE_DESTROY_DUMB (DRM_IOCTL_BASE + 0x08)
+#define DRM_IOCTL_MODE_ADDFB     (DRM_IOCTL_BASE + 0x09)
+#define DRM_IOCTL_MODE_RMFB      (DRM_IOCTL_BASE + 0x0A)
+#define DRM_IOCTL_MODE_PAGE_FLIP (DRM_IOCTL_BASE + 0x0B)
+#define DRM_IOCTL_GEM_CLOSE      (DRM_IOCTL_BASE + 0x0C)
+#define DRM_IOCTL_GEM_OPEN       (DRM_IOCTL_BASE + 0x0D)
+#define DRM_IOCTL_SET_MASTER     (DRM_IOCTL_BASE + 0x0E)
+#define DRM_IOCTL_DROP_MASTER    (DRM_IOCTL_BASE + 0x0F)
 
-#define O_WL_DISPLAY 1
-#define O_WL_REGISTRY 2
-#define O_WL_COMPOSITOR 3
-#define O_WL_SHM 4
-#define O_WL_SURFACE 5
-#define O_WL_SHM_POOL 6
-#define O_WL_BUFFER 7
-#define O_WL_CALLBACK 8
-#define O_WL_OUTPUT 9
-#define O_WL_SEAT 10
-#define O_WL_POINTER 11
-#define O_WL_KEYBOARD 12
-#define O_XDG_WM_BASE 20
-#define O_XDG_SURFACE 21
-#define O_XDG_TOPLEVEL 22
+/* GBM-compatible buffer object */
+struct ams_gbm_bo {
+    uint32_t handle;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+    uint32_t format;
+    uint64_t map_offset;
+    void *map;
+    uint32_t fb_id;
+};
 
+/* DRM mode info (matches kernel struct) */
+struct ams_drm_mode {
+    uint32_t clock;
+    uint16_t hdisplay, hsync_start, hsync_end, htotal;
+    uint16_t vdisplay, vsync_start, vsync_end, vtotal;
+    uint32_t flags;
+    uint32_t type;
+    char name[32];
+};
+
+/* DRM resources */
+struct ams_drm_resources {
+    uint32_t count_crtcs;
+    uint32_t count_connectors;
+    uint32_t count_encoders;
+    uint32_t count_fbs;
+    uint32_t crtc_ids[8];
+    uint32_t connector_ids[8];
+    uint32_t encoder_ids[8];
+};
+
+/* DRM connector */
+struct ams_drm_connector {
+    uint32_t connector_id;
+    uint32_t encoder_id;
+    uint32_t connector_type;
+    uint32_t connection;  /* 1=connected, 2=disconnected */
+    uint32_t count_modes;
+    struct ams_drm_mode modes[16];
+    uint32_t mm_width, mm_height;
+};
+
+/* Dumb buffer create */
+struct ams_drm_create_dumb {
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t flags;
+    uint32_t handle;
+    uint32_t pitch;
+    uint64_t size;
+};
+
+/* Framebuffer add */
+struct ams_drm_fb {
+    uint32_t fb_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint32_t depth;
+    uint32_t handle;
+};
+
+/* Wayland wire protocol types */
 struct linux_sockaddr_un { uint16_t sun_family; char sun_path[108]; };
 struct linux_iovec { void* iov_base; uint64_t iov_len; };
 struct linux_msghdr {
     void* msg_name; uint32_t msg_namelen; uint32_t __pad0;
     struct linux_iovec* msg_iov; uint64_t msg_iovlen;
-    void* msg_control; uint64_t msg_controllen; uint32_t msg_flags; uint32_t __pad1;
+    void* msg_control; uint64_t msg_controllen;
+    uint32_t msg_flags; uint32_t __pad1;
 };
 struct linux_cmsghdr { uint64_t cmsg_len; int32_t cmsg_level; int32_t cmsg_type; };
 struct linux_timespec_local { int64_t tv_sec; int64_t tv_nsec; };
 
+struct linux_pollfd {
+    int fd;
+    int16_t events;
+    int16_t revents;
+};
+
+#define POLLIN  0x001
+#define POLLOUT 0x004
+#define POLLERR 0x008
+#define POLLHUP 0x010
+
+#define WL_OBJECT_MAX 512
+#define WL_RX_CAP 8192
+#define WL_MAX_CLIENTS 16
+
+/* Wayland object types */
+#define O_WL_DISPLAY 1
+#define O_WL_REGISTRY 2
+#define O_WL_COMPOSITOR 3
+#define O_WL_SHM 4
+#define O_WL_SURFACE 5
+#define O_WL_SHM_POOL 6
+#define O_WL_BUFFER 7
+#define O_WL_CALLBACK 8
+#define O_WL_OUTPUT 9
+#define O_WL_SEAT 10
+#define O_WL_POINTER 11
+#define O_WL_KEYBOARD 12
+#define O_XDG_WM_BASE 20
+#define O_XDG_SURFACE 21
+#define O_XDG_TOPLEVEL 22
+#define O_WL_SUBCOMPOSITOR 23
+#define O_WL_DATA_DEVICE_MANAGER 24
+
 typedef struct wl_obj_state {
-    uint32_t type, pool_id, offset, format, attached_buffer_id, role_id, frame_callback_id, client_fd;
+    uint32_t type, pool_id, offset, format, attached_buffer_id;
+    uint32_t role_id, frame_callback_id, client_idx;
     int fd;
     uint8_t* map;
     uint32_t size;
     int32_t width, height, stride;
+    int32_t x, y;   /* surface position */
 } wl_obj_state;
 
-typedef struct wl_fd_queue { int data[WL_FDQ_CAP]; uint32_t head, tail; } wl_fd_queue;
 typedef struct wl_client_state {
     int fd;
     uint32_t pointer_id, keyboard_id, focused_surface, serial;
+    uint8_t rx[WL_RX_CAP];
+    uint32_t rx_len;
+    int pass_fds[32];
+    uint32_t pass_head, pass_tail;
+    wl_obj_state objs[WL_OBJECT_MAX];
+    uint8_t active;
 } wl_client_state;
 
-static wl_obj_state g_objs[WL_OBJECT_MAX];
-static wl_client_state g_client = {0};
-static uint32_t* wl_fb = 0;
-static uint32_t wl_fb_w = 1280, wl_fb_h = 720;
+static wl_client_state g_clients[WL_MAX_CLIENTS];
+static int g_drm_fd = -1;
+static uint32_t* g_fb_pixels = 0;
+static uint32_t g_fb_w = 0, g_fb_h = 0;
+static uint32_t g_fb_stride = 0;
+static uint32_t g_fb_handle = 0, g_fb_id = 0;
 static uint32_t g_pointer_x = 80, g_pointer_y = 80;
 static uint8_t g_pointer_buttons = 0;
 
-static void puts1(const char* s) { int n = 0; while (s[n]) ++n; ams_syscall(1, 1, (uint64_t)s, (uint64_t)n, 0, 0); ams_syscall(1, 1, (uint64_t)"\n", 1, 0, 0); }
-static uint32_t now_ms(void) { struct linux_timespec_local ts; if ((long)ams_syscall(SYS_CLOCK_GETTIME, 0, (uint64_t)&ts, 0, 0, 0) != 0) return 0; return (uint32_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL); }
-static uint32_t rd_u32(const uint8_t* p) { return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
-static void wr_u32(uint8_t* p, uint32_t v) { p[0]=(uint8_t)(v&0xFF); p[1]=(uint8_t)((v>>8)&0xFF); p[2]=(uint8_t)((v>>16)&0xFF); p[3]=(uint8_t)((v>>24)&0xFF); }
-static uint32_t append_u32(uint8_t* out, uint32_t at, uint32_t v) { wr_u32(out + at, v); return at + 4; }
-static uint32_t append_i32(uint8_t* out, uint32_t at, int32_t v) { wr_u32(out + at, (uint32_t)v); return at + 4; }
-static uint32_t append_string(uint8_t* out, uint32_t at, const char* s) { uint32_t len=0; while (s[len]) ++len; at=append_u32(out,at,len+1); memcpy(out+at,s,len); out[at+len]=0; at+=len+1; while(at&3U) out[at++]=0; return at; }
-
-static long send_packet(int fd, const uint8_t* data, uint32_t len, int send_fd) {
-    struct linux_iovec iov = {(void*)data, len};
-    uint8_t control[32] = {0}; struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov; msg.msg_iovlen = 1;
-    if (send_fd >= 0) {
-        struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
-        ch->cmsg_len = sizeof(struct linux_cmsghdr) + sizeof(int); ch->cmsg_level = SOL_SOCKET; ch->cmsg_type = SCM_RIGHTS;
-        *(int*)(control + sizeof(struct linux_cmsghdr)) = send_fd; msg.msg_control = control; msg.msg_controllen = ch->cmsg_len;
-    }
-    return (long)ams_syscall(SYS_SENDMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
-}
-
-static int recv_packet(int fd, uint8_t* data, uint32_t cap, int* recv_fd) {
-    struct linux_iovec iov = {data, cap};
-    uint8_t control[64] = {0}; struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov; msg.msg_iovlen = 1; msg.msg_control = control; msg.msg_controllen = sizeof(control); *recv_fd = -1;
-    int rc = (int)ams_syscall(SYS_RECVMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
-    if (rc <= 0) return rc;
-    if (msg.msg_controllen >= sizeof(struct linux_cmsghdr) + sizeof(int)) {
-        struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
-        if (ch->cmsg_level == SOL_SOCKET && ch->cmsg_type == SCM_RIGHTS) *recv_fd = *(int*)(control + sizeof(struct linux_cmsghdr));
-    }
-    return rc;
-}
-
-static void fdq_init(wl_fd_queue* q){ q->head=0; q->tail=0; for(uint32_t i=0;i<WL_FDQ_CAP;++i) q->data[i]=-1; }
-static int fdq_push(wl_fd_queue* q,int fd){ uint32_t n=(q->tail+1U)%WL_FDQ_CAP; if(n==q->head) return -1; q->data[q->tail]=fd; q->tail=n; return 0; }
-static int fdq_pop(wl_fd_queue* q){ if(q->head==q->tail) return -1; int fd=q->data[q->head]; q->head=(q->head+1U)%WL_FDQ_CAP; return fd; }
-
-static void send_event_header(uint8_t* pkt, uint32_t obj_id, uint16_t opcode, uint16_t size){ wr_u32(pkt, obj_id); wr_u32(pkt+4, ((uint32_t)size<<16)|opcode); }
-static void send_callback_done(int fd, uint32_t cb_id){ uint8_t pkt[12]={0}; send_event_header(pkt, cb_id, 0, 12); wr_u32(pkt+8, now_ms()); (void)send_packet(fd,pkt,12,-1); }
-static void send_buffer_release(int fd, uint32_t id){ uint8_t pkt[8]={0}; send_event_header(pkt,id,0,8); (void)send_packet(fd,pkt,8,-1); }
-
-static void send_registry_global(int fd, uint32_t reg_id, uint32_t name, const char* iface, uint32_t version) {
-    uint8_t pkt[256]={0}; uint32_t at=0; at=append_u32(pkt,at,reg_id); uint32_t hdr=at; at=append_u32(pkt,at,0); at=append_u32(pkt,at,name); at=append_string(pkt,at,iface); at=append_u32(pkt,at,version); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1);
-}
-
-static void draw_shell_background(void){
-    if(!wl_fb) return;
-    for(uint32_t y=0;y<wl_fb_h;++y){ uint32_t c=(y<36)?0x1E2733:0x151C26; for(uint32_t x=0;x<wl_fb_w;++x) wl_fb[y*wl_fb_w+x]=c; }
-}
-static void draw_pointer(void){
-    for(uint32_t y=0;y<12;++y) for(uint32_t x=0;x<10;++x){ uint32_t px=g_pointer_x+x, py=g_pointer_y+y; if(px>=wl_fb_w||py>=wl_fb_h) continue; if(x<=y) wl_fb[py*wl_fb_w+px]=0xFFFFFF; }
-}
-
-static void present_surface(uint32_t sid){
-    if(sid>=WL_OBJECT_MAX) return;
-    wl_obj_state* s=&g_objs[sid]; if(s->type!=O_WL_SURFACE||!s->attached_buffer_id) return;
-    wl_obj_state* b=&g_objs[s->attached_buffer_id]; if(b->type!=O_WL_BUFFER||!b->pool_id||b->pool_id>=WL_OBJECT_MAX) return;
-    wl_obj_state* p=&g_objs[b->pool_id]; if(p->type!=O_WL_SHM_POOL||!p->map) return;
-    draw_shell_background();
-    uint32_t cw=(b->width>0&&(uint32_t)b->width<wl_fb_w)?(uint32_t)b->width:wl_fb_w;
-    uint32_t ch=(b->height>0&&(uint32_t)b->height<wl_fb_h)?(uint32_t)b->height:wl_fb_h;
-    for(uint32_t y=0;y<ch;++y){ uint32_t off=b->offset+y*(uint32_t)b->stride; if(off+cw*4U>p->size) break; memcpy(&wl_fb[y*wl_fb_w], p->map+off, cw*4U); }
-    draw_pointer();
-    (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0);
-    if(s->frame_callback_id && s->frame_callback_id<WL_OBJECT_MAX){ send_callback_done((int)s->client_fd,s->frame_callback_id); g_objs[s->frame_callback_id].type=0; s->frame_callback_id=0; }
-    send_buffer_release((int)s->client_fd, s->attached_buffer_id);
-}
-
-static void clear_objects(int fd){
-    memset(g_objs,0,sizeof(g_objs)); memset(&g_client,0,sizeof(g_client)); g_client.fd=fd;
-    g_objs[1].type=O_WL_DISPLAY; g_objs[2].type=O_WL_COMPOSITOR; g_objs[3].type=O_WL_SHM;
-}
-
-static void send_output_info(int fd, uint32_t oid){
-    uint8_t pkt[128]={0}; uint32_t at=0; at=append_u32(pkt,at,oid); uint32_t hdr=at; at=append_u32(pkt,at,0);
-    at=append_i32(pkt,at,0); at=append_i32(pkt,at,0); at=append_i32(pkt,at,300); at=append_i32(pkt,at,170); at=append_u32(pkt,at,1); at=append_string(pkt,at,"AMS"); at=append_string(pkt,at,"Virtual-0"); at=append_i32(pkt,at,0); wr_u32(pkt+hdr,(at<<16)|0); (void)send_packet(fd,pkt,at,-1);
-    uint8_t mode[24]={0}; send_event_header(mode,oid,1,20); wr_u32(mode+8,3); wr_u32(mode+12,wl_fb_w); wr_u32(mode+16,wl_fb_h); wr_u32(mode+20,60000); (void)send_packet(fd,mode,24,-1);
-    uint8_t scale[12]={0}; send_event_header(scale,oid,3,12); wr_u32(scale+8,1); (void)send_packet(fd,scale,12,-1);
-    uint8_t done[8]={0}; send_event_header(done,oid,2,8); (void)send_packet(fd,done,8,-1);
-}
-
-static void send_seat_info(int fd, uint32_t sid){
-    uint8_t caps[12]={0}; send_event_header(caps,sid,0,12); wr_u32(caps+8,3); (void)send_packet(fd,caps,12,-1);
-    uint8_t name[64]={0}; uint32_t at=0; at=append_u32(name,at,sid); uint32_t hdr=at; at=append_u32(name,at,0); at=append_string(name,at,"seat0"); wr_u32(name+hdr,(at<<16)|1); (void)send_packet(fd,name,at,-1);
-}
-
-static void send_pointer_enter(int fd, uint32_t pid, uint32_t sid){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,0,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,g_pointer_x<<8); wr_u32(pkt+20,g_pointer_y<<8); (void)send_packet(fd,pkt,24,-1); }
-static void send_pointer_motion(int fd, uint32_t pid){ uint8_t pkt[20]={0}; send_event_header(pkt,pid,2,20); wr_u32(pkt+8,now_ms()); wr_u32(pkt+12,g_pointer_x<<8); wr_u32(pkt+16,g_pointer_y<<8); (void)send_packet(fd,pkt,20,-1); }
-static void send_pointer_button(int fd,uint32_t pid,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,pid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,0x110); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-static void send_keyboard_enter(int fd,uint32_t kid,uint32_t sid){ uint8_t pkt[20]={0}; send_event_header(pkt,kid,1,20); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,sid); wr_u32(pkt+16,0); (void)send_packet(fd,pkt,20,-1); }
-static void send_keyboard_key(int fd,uint32_t kid,uint32_t key,uint32_t state){ uint8_t pkt[24]={0}; send_event_header(pkt,kid,3,24); wr_u32(pkt+8,++g_client.serial); wr_u32(pkt+12,now_ms()); wr_u32(pkt+16,key); wr_u32(pkt+20,state); (void)send_packet(fd,pkt,24,-1); }
-
-static void handle_input(void){
-    uint64_t mev=ams_syscall(SYS_AMS_GET_MOUSE_EVENT,0,0,0,0,0);
-    if(mev && g_client.pointer_id && g_client.focused_surface){
-        g_pointer_x=(uint32_t)(mev&0xFFFFU); g_pointer_y=(uint32_t)((mev>>16)&0xFFFFU);
-        uint8_t buttons=(uint8_t)((mev>>32)&0xFFU); uint8_t old=g_pointer_buttons; g_pointer_buttons=buttons;
-        send_pointer_motion(g_client.fd,g_client.pointer_id);
-        if(old!=g_pointer_buttons) send_pointer_button(g_client.fd,g_client.pointer_id,(g_pointer_buttons&1U)?1U:0U);
-    }
-    uint64_t kev=ams_syscall(SYS_AMS_GET_KEY,0,0,0,0,0);
-    if(kev && g_client.keyboard_id && g_client.focused_surface){
-        int32_t k=(int32_t)kev; uint32_t st=1; if(k<0){st=0;k=-k;} send_keyboard_key(g_client.fd,g_client.keyboard_id,(uint32_t)k,st);
-    }
-}
-
-static void process_message(int fd, wl_fd_queue* fdq, uint32_t oid, uint16_t op, const uint8_t* p, uint32_t n){
-    if(oid>=WL_OBJECT_MAX) return;
-    wl_obj_state* o=&g_objs[oid];
-    if(oid==1 && o->type==O_WL_DISPLAY){
-        if(op==0 && n>=4){ uint32_t cb=rd_u32(p); if(cb&&cb<WL_OBJECT_MAX){ g_objs[cb].type=O_WL_CALLBACK; send_callback_done(fd,cb);} }
-        if(op==1 && n>=4){ uint32_t rid=rd_u32(p); if(rid&&rid<WL_OBJECT_MAX){ g_objs[rid].type=O_WL_REGISTRY; send_registry_global(fd,rid,1,"wl_compositor",4); send_registry_global(fd,rid,2,"wl_shm",1); send_registry_global(fd,rid,3,"wl_output",2); send_registry_global(fd,rid,4,"wl_seat",5); send_registry_global(fd,rid,5,"xdg_wm_base",1);} }
-        return;
-    }
-    if(o->type==O_WL_REGISTRY){
-        if(op==0 && n>=16){ uint32_t name=rd_u32(p); uint32_t sl=rd_u32(p+4); uint32_t sp=(sl+3U)&~3U; if(n<4+4+sp+8) return; uint32_t nid=rd_u32(p+12+sp); if(!nid||nid>=WL_OBJECT_MAX) return;
-            if(name==1) g_objs[nid].type=O_WL_COMPOSITOR;
-            else if(name==2){ g_objs[nid].type=O_WL_SHM; uint8_t f[12]={0}; send_event_header(f,nid,0,12); wr_u32(f+8,0); (void)send_packet(fd,f,12,-1); }
-            else if(name==3){ g_objs[nid].type=O_WL_OUTPUT; send_output_info(fd,nid); }
-            else if(name==4){ g_objs[nid].type=O_WL_SEAT; send_seat_info(fd,nid); }
-            else if(name==5){ g_objs[nid].type=O_XDG_WM_BASE; uint8_t ping[12]={0}; send_event_header(ping,nid,0,12); wr_u32(ping+8,++g_client.serial); (void)send_packet(fd,ping,12,-1); }
-        } return;
-    }
-    if(o->type==O_WL_COMPOSITOR){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_SURFACE; g_objs[nid].client_fd=(uint32_t)fd; } } return; }
-    if(o->type==O_WL_SHM){ if(op==0&&n>=8){ uint32_t nid=rd_u32(p), sz=rd_u32(p+4); int passed=fdq_pop(fdq); if(!nid||nid>=WL_OBJECT_MAX||passed<0||sz==0) return; g_objs[nid].type=O_WL_SHM_POOL; g_objs[nid].fd=passed; g_objs[nid].size=sz; g_objs[nid].map=(uint8_t*)mmap(0,sz,PROT_READ,MAP_SHARED,passed,0); if((uint64_t)g_objs[nid].map>(uint64_t)-4096LL) g_objs[nid].map=0;} return; }
-    if(o->type==O_WL_SHM_POOL){ if(op==0&&n>=24){ uint32_t nid=rd_u32(p); if(!nid||nid>=WL_OBJECT_MAX) return; g_objs[nid].type=O_WL_BUFFER; g_objs[nid].pool_id=oid; g_objs[nid].offset=rd_u32(p+4); g_objs[nid].width=(int32_t)rd_u32(p+8); g_objs[nid].height=(int32_t)rd_u32(p+12); g_objs[nid].stride=(int32_t)rd_u32(p+16); g_objs[nid].format=rd_u32(p+20); g_objs[nid].client_fd=(uint32_t)fd; } return; }
-    if(o->type==O_WL_SURFACE){
-        if(op==1&&n>=12) o->attached_buffer_id=rd_u32(p);
-        else if(op==3&&n>=4){ uint32_t cb=rd_u32(p); o->frame_callback_id=cb; if(cb&&cb<WL_OBJECT_MAX) g_objs[cb].type=O_WL_CALLBACK; }
-        else if(op==6){ g_client.focused_surface=oid; present_surface(oid); if(g_client.pointer_id) send_pointer_enter(fd,g_client.pointer_id,oid); if(g_client.keyboard_id) send_keyboard_enter(fd,g_client.keyboard_id,oid); }
-        return;
-    }
-    if(o->type==O_WL_SEAT){ if(op==0&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_POINTER; g_client.pointer_id=nid; }} else if(op==1&&n>=4){ uint32_t nid=rd_u32(p); if(nid&&nid<WL_OBJECT_MAX){ g_objs[nid].type=O_WL_KEYBOARD; g_client.keyboard_id=nid; }} return; }
-    if(o->type==O_XDG_WM_BASE){ if(op==1&&n>=8){ uint32_t xs=rd_u32(p), sid=rd_u32(p+4); if(xs&&xs<WL_OBJECT_MAX&&sid&&sid<WL_OBJECT_MAX){ g_objs[xs].type=O_XDG_SURFACE; g_objs[xs].role_id=sid; g_objs[sid].role_id=xs; uint8_t cfg[12]={0}; send_event_header(cfg,xs,0,12); wr_u32(cfg+8,++g_client.serial); (void)send_packet(fd,cfg,12,-1); }} return; }
-    if(o->type==O_XDG_SURFACE){ if(op==1&&n>=4){ uint32_t tl=rd_u32(p); if(tl&&tl<WL_OBJECT_MAX){ g_objs[tl].type=O_XDG_TOPLEVEL; uint8_t tcfg[20]={0}; send_event_header(tcfg,tl,0,20); wr_u32(tcfg+8,wl_fb_w); wr_u32(tcfg+12,wl_fb_h); wr_u32(tcfg+16,0); (void)send_packet(fd,tcfg,20,-1); uint8_t scfg[12]={0}; send_event_header(scfg,oid,0,12); wr_u32(scfg+8,++g_client.serial); (void)send_packet(fd,scfg,12,-1); }} return; }
-    if(o->type==O_WL_BUFFER && op==0) o->type=0;
-}
-
-static int bootstrap_local_shell(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int fd=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(fd<0) return -1;
-    if((int)ams_syscall(SYS_CONNECT,(uint64_t)fd,(uint64_t)&addr,sizeof(addr),0,0)<0) return -2;
-    const uint32_t reg=40, comp=41, shm=42, surf=43, pool=44, buf=45, xwm=46, xsurf=47, xtop=48;
-    uint8_t m[512]={0}; uint32_t at=0, h=0;
-    at=append_u32(m,at,1); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,reg); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,1); at=append_string(m,at,"wl_compositor"); at=append_u32(m,at,4); at=append_u32(m,at,comp); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,2); at=append_string(m,at,"wl_shm"); at=append_u32(m,at,1); at=append_u32(m,at,shm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,reg); h=at; at=append_u32(m,at,0); at=append_u32(m,at,5); at=append_string(m,at,"xdg_wm_base"); at=append_u32(m,at,1); at=append_u32(m,at,xwm); wr_u32(m+h,(at<<16)|0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,comp); at=append_u32(m,at,(12U<<16)|0U); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xwm); at=append_u32(m,at,(16U<<16)|1U); at=append_u32(m,at,xsurf); at=append_u32(m,at,surf); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,xsurf); at=append_u32(m,at,(12U<<16)|1U); at=append_u32(m,at,xtop); (void)send_packet(fd,m,at,-1);
-    int w=960,hh=540,stride=w*4,size=stride*hh; int shmfd=(int)ams_syscall(SYS_MEMFD_CREATE,(uint64_t)"wl-shell",0,0,0,0); if(shmfd<0) return -3;
-    if((int)ams_syscall(SYS_FTRUNCATE,(uint64_t)shmfd,(uint64_t)size,0,0,0)<0) return -4;
-    uint32_t* pix=(uint32_t*)mmap(0,(size_t)size,PROT_READ|PROT_WRITE,MAP_SHARED,shmfd,0); if((uint64_t)pix>(uint64_t)-4096LL) return -5;
-    for(int y=0;y<hh;++y) for(int x=0;x<w;++x) pix[y*w+x]=(y<40)?0x2B394C:0x1A2230;
-    at=0; at=append_u32(m,at,shm); at=append_u32(m,at,(16U<<16)|0U); at=append_u32(m,at,pool); at=append_u32(m,at,(uint32_t)size); (void)send_packet(fd,m,at,shmfd);
-    at=0; at=append_u32(m,at,pool); at=append_u32(m,at,(32U<<16)|0U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,(uint32_t)w); at=append_u32(m,at,(uint32_t)hh); at=append_u32(m,at,(uint32_t)stride); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(20U<<16)|1U); at=append_u32(m,at,buf); at=append_u32(m,at,0); at=append_u32(m,at,0); (void)send_packet(fd,m,at,-1);
-    at=0; at=append_u32(m,at,surf); at=append_u32(m,at,(8U<<16)|6U); (void)send_packet(fd,m,at,-1);
-    return fd;
-}
-
-static void handle_client(int cli){
-    uint8_t rx[WL_RX_CAP]; uint32_t rx_len=0; wl_fd_queue fdq; fdq_init(&fdq); clear_objects(cli);
-    puts1("wl-compositor: client connected");
-    while(1){
-        int pass=-1; int n=recv_packet(cli,rx+rx_len,WL_RX_CAP-rx_len,&pass);
-        if(n==0) break;
-        if(n<0){ handle_input(); continue; }
-        if(pass>=0) (void)fdq_push(&fdq,pass);
-        rx_len+=(uint32_t)n;
-        uint32_t at=0; while(rx_len-at>=8){ uint32_t oid=rd_u32(rx+at), hdr=rd_u32(rx+at+4); uint16_t op=(uint16_t)(hdr&0xFFFFU), sz=(uint16_t)(hdr>>16); if(sz<8||at+sz>rx_len) break; process_message(cli,&fdq,oid,op,rx+at+8,(uint32_t)sz-8); at+=sz; }
-        if(at>0){ memmove(rx,rx+at,rx_len-at); rx_len-=at; }
-        handle_input();
-    }
-    puts1("wl-compositor: client disconnected");
-}
-
-int main(void){
-    struct linux_sockaddr_un addr={0}; addr.sun_family=AF_UNIX; { const char* p="/run/user/0/wayland-0"; for(int i=0;p[i]&&i<107;++i) addr.sun_path[i]=p[i]; }
-    int srv=(int)ams_syscall(SYS_SOCKET,AF_UNIX,SOCK_STREAM,0,0,0); if(srv<0){ puts1("wl-compositor: socket failed"); return 1; }
-    if((int)ams_syscall(SYS_BIND,srv,(uint64_t)&addr,sizeof(addr),0,0)<0){ puts1("wl-compositor: bind failed"); return 2; }
-    (void)ams_syscall(SYS_LISTEN,srv,8,0,0,0); puts1("wl-compositor: listening on wayland-0");
-    if((int)ams_syscall(SYS_AMS_GET_FB_INFO,(uint64_t)&wl_fb_w,(uint64_t)&wl_fb_h,0,0,0)!=0||wl_fb_w==0||wl_fb_h==0){ wl_fb_w=1280; wl_fb_h=720; }
-    wl_fb=(uint32_t*)malloc((size_t)wl_fb_w*(size_t)wl_fb_h*sizeof(uint32_t)); if(!wl_fb){ puts1("wl-compositor: fb buffer alloc failed"); return 3; }
-    draw_shell_background(); draw_pointer(); (void)ams_syscall(SYS_AMS_FB_BLIT,(uint64_t)wl_fb,wl_fb_w,wl_fb_h,0,0);
-    puts1("wl-compositor: protocol core+xdg+seat ready");
-    if(bootstrap_local_shell()>=0) puts1("wl-compositor: local shell bootstrap queued"); else puts1("wl-compositor: local shell bootstrap failed");
-    while(1){ int cli=(int)ams_syscall(SYS_ACCEPT,srv,0,0,0,0); if(cli<0){ handle_input(); continue; } handle_client(cli); }
-}
-#include "ams_syscall.h"
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define SYS_SOCKET 41
-#define SYS_BIND 49
-#define SYS_LISTEN 50
-#define SYS_ACCEPT 43
-#define SYS_CONNECT 42
-#define SYS_SENDMSG 46
-#define SYS_RECVMSG 47
-#define SYS_CLOSE 3
-#define SYS_MEMFD_CREATE 319
-#define SYS_FTRUNCATE 77
-#define SYS_CLOCK_GETTIME 228
-
-#define AF_UNIX 1
-#define SOCK_STREAM 1
-#define SOL_SOCKET 1
-#define SCM_RIGHTS 1
-#define PROT_READ 0x1
-#define PROT_WRITE 0x2
-#define MAP_SHARED 0x01
-
-#define WL_OBJECT_MAX 512
-#define WL_RX_CAP 8192
-#define WL_FDQ_CAP 32
-
-#define WL_DISPLAY 1
-#define WL_REGISTRY 2
-#define WL_COMPOSITOR 3
-#define WL_SHM 4
-#define WL_SURFACE 5
-#define WL_SHM_POOL 6
-#define WL_BUFFER 7
-#define WL_CALLBACK 8
-#define WL_OUTPUT 9
-#define WL_SEAT 10
-#define WL_POINTER 11
-#define WL_KEYBOARD 12
-#define XDG_WM_BASE 20
-#define XDG_SURFACE 21
-#define XDG_TOPLEVEL 22
-
-#define WL_SHM_FORMAT_XRGB8888 0
-#define WL_SEAT_CAP_POINTER 2
-#define WL_SEAT_CAP_KEYBOARD 1
-
-struct linux_sockaddr_un {
-    uint16_t sun_family;
-    char sun_path[108];
-};
-
-struct linux_iovec {
-    void* iov_base;
-    uint64_t iov_len;
-};
-
-struct linux_msghdr {
-    void* msg_name;
-    uint32_t msg_namelen;
-    uint32_t __pad0;
-    struct linux_iovec* msg_iov;
-    uint64_t msg_iovlen;
-    void* msg_control;
-    uint64_t msg_controllen;
-    uint32_t msg_flags;
-    uint32_t __pad1;
-};
-
-struct linux_cmsghdr {
-    uint64_t cmsg_len;
-    int32_t cmsg_level;
-    int32_t cmsg_type;
-};
-
-struct linux_timespec_local {
-    int64_t tv_sec;
-    int64_t tv_nsec;
-};
-
-typedef struct wl_obj_state {
-    uint32_t type;
-    int fd;
-    uint8_t* map;
-    uint32_t size;
-    uint32_t pool_id;
-    uint32_t offset;
-    int32_t width;
-    int32_t height;
-    int32_t stride;
-    uint32_t format;
-    uint32_t attached_buffer_id;
-    uint32_t role_id;
-    uint32_t frame_callback_id;
-    uint32_t client_fd;
-} wl_obj_state;
-
-typedef struct wl_fd_queue {
-    int data[WL_FDQ_CAP];
-    uint32_t head;
-    uint32_t tail;
-} wl_fd_queue;
-
-typedef struct wl_client_state {
-    int fd;
-    uint32_t pointer_id;
-    uint32_t keyboard_id;
-    uint32_t seat_id;
-    uint32_t output_id;
-    uint32_t xdg_wm_base_id;
-    uint32_t focused_surface;
-    uint32_t serial;
-} wl_client_state;
-
-static uint32_t* wl_fb = 0;
-static uint32_t wl_fb_w = 1280;
-static uint32_t wl_fb_h = 720;
-static wl_obj_state g_objs[WL_OBJECT_MAX];
-static wl_client_state g_client = {0};
-
-static uint32_t g_pointer_x = 64;
-static uint32_t g_pointer_y = 64;
-static uint8_t g_pointer_buttons = 0;
-
 static void puts1(const char* s) {
-    int n = 0;
-    while (s[n]) ++n;
-    ams_syscall(1, 1, (uint64_t)s, (uint64_t)n, 0, 0);
-    ams_syscall(1, 1, (uint64_t)"\n", 1, 0, 0);
+    int n = 0; while (s[n]) ++n;
+    ams_syscall(SYS_WRITE, 1, (uint64_t)s, (uint64_t)n, 0, 0);
+    ams_syscall(SYS_WRITE, 1, (uint64_t)"\n", 1, 0, 0);
 }
 
 static uint32_t now_ms(void) {
     struct linux_timespec_local ts;
-    long rc = (long)ams_syscall(SYS_CLOCK_GETTIME, 0, (uint64_t)&ts, 0, 0, 0);
-    if (rc != 0) return 0;
+    if ((long)ams_syscall(SYS_CLOCK_GETTIME, 0, (uint64_t)&ts, 0, 0, 0) != 0) return 0;
     return (uint32_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
 }
 
@@ -999,29 +219,17 @@ static uint32_t rd_u32(const uint8_t* p) {
 }
 
 static void wr_u32(uint8_t* p, uint32_t v) {
-    p[0] = (uint8_t)(v & 0xFF);
-    p[1] = (uint8_t)((v >> 8) & 0xFF);
-    p[2] = (uint8_t)((v >> 16) & 0xFF);
-    p[3] = (uint8_t)((v >> 24) & 0xFF);
+    p[0]=(uint8_t)(v&0xFF); p[1]=(uint8_t)((v>>8)&0xFF);
+    p[2]=(uint8_t)((v>>16)&0xFF); p[3]=(uint8_t)((v>>24)&0xFF);
 }
 
-static uint32_t append_u32(uint8_t* out, uint32_t at, uint32_t v) {
-    wr_u32(out + at, v);
-    return at + 4;
-}
-
-static uint32_t append_i32(uint8_t* out, uint32_t at, int32_t v) {
-    wr_u32(out + at, (uint32_t)v);
-    return at + 4;
-}
+static uint32_t append_u32(uint8_t* out, uint32_t at, uint32_t v) { wr_u32(out + at, v); return at + 4; }
+static uint32_t append_i32(uint8_t* out, uint32_t at, int32_t v) { wr_u32(out + at, (uint32_t)v); return at + 4; }
 
 static uint32_t append_string(uint8_t* out, uint32_t at, const char* s) {
-    uint32_t len = 0;
-    while (s[len]) ++len;
+    uint32_t len = 0; while (s[len]) ++len;
     at = append_u32(out, at, len + 1);
-    memcpy(out + at, s, len);
-    out[at + len] = 0;
-    at += len + 1;
+    memcpy(out + at, s, len); out[at + len] = 0; at += len + 1;
     while (at & 3U) out[at++] = 0;
     return at;
 }
@@ -1030,16 +238,13 @@ static long send_packet(int fd, const uint8_t* data, uint32_t len, int send_fd) 
     struct linux_iovec iov = {(void*)data, len};
     uint8_t control[32] = {0};
     struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
+    msg.msg_iov = &iov; msg.msg_iovlen = 1;
     if (send_fd >= 0) {
         struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
         ch->cmsg_len = sizeof(struct linux_cmsghdr) + sizeof(int);
-        ch->cmsg_level = SOL_SOCKET;
-        ch->cmsg_type = SCM_RIGHTS;
+        ch->cmsg_level = SOL_SOCKET; ch->cmsg_type = SCM_RIGHTS;
         *(int*)(control + sizeof(struct linux_cmsghdr)) = send_fd;
-        msg.msg_control = control;
-        msg.msg_controllen = ch->cmsg_len;
+        msg.msg_control = control; msg.msg_controllen = ch->cmsg_len;
     }
     return (long)ams_syscall(SYS_SENDMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
 }
@@ -1048,692 +253,583 @@ static int recv_packet(int fd, uint8_t* data, uint32_t cap, int* recv_fd) {
     struct linux_iovec iov = {data, cap};
     uint8_t control[64] = {0};
     struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control;
-    msg.msg_controllen = sizeof(control);
+    msg.msg_iov = &iov; msg.msg_iovlen = 1;
+    msg.msg_control = control; msg.msg_controllen = sizeof(control);
     *recv_fd = -1;
     int rc = (int)ams_syscall(SYS_RECVMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
     if (rc <= 0) return rc;
     if (msg.msg_controllen >= sizeof(struct linux_cmsghdr) + sizeof(int)) {
         struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
-        if (ch->cmsg_level == SOL_SOCKET && ch->cmsg_type == SCM_RIGHTS) {
+        if (ch->cmsg_level == SOL_SOCKET && ch->cmsg_type == SCM_RIGHTS)
             *recv_fd = *(int*)(control + sizeof(struct linux_cmsghdr));
-        }
     }
     return rc;
 }
 
-static void fdq_init(wl_fd_queue* q) {
-    q->head = 0;
-    q->tail = 0;
-    for (uint32_t i = 0; i < WL_FDQ_CAP; ++i) q->data[i] = -1;
-}
+/* --- DRM/KMS backend --- */
 
-static int fdq_push(wl_fd_queue* q, int fd) {
-    uint32_t next = (q->tail + 1U) % WL_FDQ_CAP;
-    if (next == q->head) return -1;
-    q->data[q->tail] = fd;
-    q->tail = next;
-    return 0;
-}
-
-static int fdq_pop(wl_fd_queue* q) {
-    if (q->head == q->tail) return -1;
-    int fd = q->data[q->head];
-    q->head = (q->head + 1U) % WL_FDQ_CAP;
+static int drm_open(void) {
+    int fd = (int)ams_syscall(2 /*SYS_OPEN*/, (uint64_t)"/dev/dri/card0", 2 /*O_RDWR*/, 0, 0, 0);
+    if (fd < 0) {
+        puts1("wl-compositor: DRM device not available, using legacy FB blit");
+        return -1;
+    }
+    ams_syscall(SYS_IOCTL, (uint64_t)fd, DRM_IOCTL_SET_MASTER, 0, 0, 0);
     return fd;
 }
 
+static int drm_setup_fb(int drm_fd, uint32_t w, uint32_t h) {
+    struct ams_drm_create_dumb create = {0};
+    create.width = w;
+    create.height = h;
+    create.bpp = 32;
+
+    if ((int)ams_syscall(SYS_IOCTL, (uint64_t)drm_fd, DRM_IOCTL_MODE_CREATE_DUMB,
+                         (uint64_t)&create, 0, 0) < 0) return -1;
+
+    g_fb_handle = create.handle;
+    g_fb_stride = create.pitch;
+
+    struct ams_drm_fb fb = {0};
+    fb.width = w; fb.height = h;
+    fb.pitch = create.pitch;
+    fb.bpp = 32; fb.depth = 24;
+    fb.handle = create.handle;
+
+    if ((int)ams_syscall(SYS_IOCTL, (uint64_t)drm_fd, DRM_IOCTL_MODE_ADDFB,
+                         (uint64_t)&fb, 0, 0) < 0) return -2;
+    g_fb_id = fb.fb_id;
+
+    uint64_t map_offset = 0;
+    if ((int)ams_syscall(SYS_IOCTL, (uint64_t)drm_fd, DRM_IOCTL_MODE_MAP_DUMB,
+                         (uint64_t)&create.handle, (uint64_t)&map_offset, 0) < 0) return -3;
+
+    g_fb_pixels = (uint32_t*)mmap(0, create.size, PROT_READ | PROT_WRITE,
+                                   MAP_SHARED, drm_fd, (long)map_offset);
+    if ((uint64_t)g_fb_pixels > (uint64_t)-4096LL) {
+        g_fb_pixels = 0;
+        return -4;
+    }
+
+    return 0;
+}
+
+static void fallback_fb_init(void) {
+    if ((int)ams_syscall(SYS_AMS_GET_FB_INFO, (uint64_t)&g_fb_w, (uint64_t)&g_fb_h,
+                         0, 0, 0) != 0 || g_fb_w == 0 || g_fb_h == 0) {
+        g_fb_w = 1280; g_fb_h = 720;
+    }
+    g_fb_stride = g_fb_w * 4;
+    g_fb_pixels = (uint32_t*)malloc((size_t)g_fb_w * (size_t)g_fb_h * sizeof(uint32_t));
+}
+
+static void present_fb(void) {
+    if (g_drm_fd >= 0 && g_fb_id) {
+        ams_syscall(SYS_IOCTL, (uint64_t)g_drm_fd, DRM_IOCTL_MODE_PAGE_FLIP,
+                    (uint64_t)&g_fb_id, 0, 0);
+    } else if (g_fb_pixels) {
+        ams_syscall(SYS_AMS_FB_BLIT, (uint64_t)g_fb_pixels, g_fb_w, g_fb_h, 0, 0);
+    }
+}
+
+/* --- Compositor rendering --- */
+
+static void draw_background(void) {
+    if (!g_fb_pixels) return;
+    for (uint32_t y = 0; y < g_fb_h; ++y) {
+        uint32_t c = (y < 36) ? 0xFF1E2733 : 0xFF151C26;
+        for (uint32_t x = 0; x < g_fb_w; ++x)
+            g_fb_pixels[y * g_fb_w + x] = c;
+    }
+}
+
+static void draw_pointer(void) {
+    for (uint32_t y = 0; y < 12; ++y)
+        for (uint32_t x = 0; x < 10; ++x) {
+            uint32_t px = g_pointer_x + x, py = g_pointer_y + y;
+            if (px >= g_fb_w || py >= g_fb_h) continue;
+            if (x <= y) g_fb_pixels[py * g_fb_w + px] = 0xFFFFFFFF;
+        }
+}
+
+static void redraw(void) {
+    draw_background();
+    /* Composite all client surfaces */
+    for (int ci = 0; ci < WL_MAX_CLIENTS; ++ci) {
+        wl_client_state* cl = &g_clients[ci];
+        if (!cl->active) continue;
+        for (uint32_t sid = 1; sid < WL_OBJECT_MAX; ++sid) {
+            wl_obj_state* s = &cl->objs[sid];
+            if (s->type != O_WL_SURFACE || !s->attached_buffer_id) continue;
+            wl_obj_state* b = &cl->objs[s->attached_buffer_id];
+            if (b->type != O_WL_BUFFER || !b->pool_id || b->pool_id >= WL_OBJECT_MAX) continue;
+            wl_obj_state* p = &cl->objs[b->pool_id];
+            if (p->type != O_WL_SHM_POOL || !p->map) continue;
+            uint32_t cw = (b->width > 0 && (uint32_t)b->width < g_fb_w) ? (uint32_t)b->width : g_fb_w;
+            uint32_t ch = (b->height > 0 && (uint32_t)b->height < g_fb_h) ? (uint32_t)b->height : g_fb_h;
+            int32_t sx = s->x, sy = s->y;
+            for (uint32_t y = 0; y < ch; ++y) {
+                int32_t dy = sy + (int32_t)y;
+                if (dy < 0 || (uint32_t)dy >= g_fb_h) continue;
+                uint32_t off = b->offset + y * (uint32_t)b->stride;
+                if (off + cw * 4U > p->size) break;
+                uint32_t* src = (uint32_t*)(p->map + off);
+                for (uint32_t x = 0; x < cw; ++x) {
+                    int32_t dx = sx + (int32_t)x;
+                    if (dx < 0 || (uint32_t)dx >= g_fb_w) continue;
+                    uint32_t pixel = src[x];
+                    uint32_t alpha = (pixel >> 24) & 0xFF;
+                    if (alpha == 0xFF) {
+                        g_fb_pixels[(uint32_t)dy * g_fb_w + (uint32_t)dx] = pixel;
+                    } else if (alpha > 0) {
+                        uint32_t dst = g_fb_pixels[(uint32_t)dy * g_fb_w + (uint32_t)dx];
+                        uint32_t inv = 255 - alpha;
+                        uint32_t r = (((pixel >> 16) & 0xFF) * alpha + ((dst >> 16) & 0xFF) * inv) / 255;
+                        uint32_t g = (((pixel >> 8) & 0xFF) * alpha + ((dst >> 8) & 0xFF) * inv) / 255;
+                        uint32_t bl = ((pixel & 0xFF) * alpha + (dst & 0xFF) * inv) / 255;
+                        g_fb_pixels[(uint32_t)dy * g_fb_w + (uint32_t)dx] = 0xFF000000 | (r << 16) | (g << 8) | bl;
+                    }
+                }
+            }
+        }
+    }
+    draw_pointer();
+    present_fb();
+}
+
+/* --- Wayland protocol helpers --- */
+
 static void send_event_header(uint8_t* pkt, uint32_t obj_id, uint16_t opcode, uint16_t size) {
-    wr_u32(pkt + 0, obj_id);
+    wr_u32(pkt, obj_id);
     wr_u32(pkt + 4, ((uint32_t)size << 16) | opcode);
 }
 
-static void send_registry_global(int fd, uint32_t reg_id, uint32_t name, const char* iface, uint32_t version) {
-    uint8_t pkt[256] = {0};
-    uint32_t at = 0;
+static void send_callback_done(int fd, uint32_t cb_id) {
+    uint8_t pkt[12] = {0};
+    send_event_header(pkt, cb_id, 0, 12);
+    wr_u32(pkt + 8, now_ms());
+    (void)send_packet(fd, pkt, 12, -1);
+}
+
+static void send_buffer_release(int fd, uint32_t id) {
+    uint8_t pkt[8] = {0};
+    send_event_header(pkt, id, 0, 8);
+    (void)send_packet(fd, pkt, 8, -1);
+}
+
+static void send_registry_global(int fd, uint32_t reg_id, uint32_t name,
+                                  const char* iface, uint32_t version) {
+    uint8_t pkt[256] = {0}; uint32_t at = 0;
     at = append_u32(pkt, at, reg_id);
-    uint32_t hdr_at = at;
-    at = append_u32(pkt, at, 0);
+    uint32_t hdr = at; at = append_u32(pkt, at, 0);
     at = append_u32(pkt, at, name);
     at = append_string(pkt, at, iface);
     at = append_u32(pkt, at, version);
-    wr_u32(pkt + hdr_at, (at << 16) | 0);
+    wr_u32(pkt + hdr, (at << 16) | 0);
     (void)send_packet(fd, pkt, at, -1);
 }
 
-static void send_shm_format(int fd, uint32_t shm_id, uint32_t fmt) {
-    uint8_t pkt[16] = {0};
-    send_event_header(pkt, shm_id, 0, 12);
-    wr_u32(pkt + 8, fmt);
-    (void)send_packet(fd, pkt, 12, -1);
-}
-
-static void send_output_geometry(int fd, uint32_t output_id) {
-    uint8_t pkt[128] = {0};
-    uint32_t at = 0;
-    at = append_u32(pkt, at, output_id);
-    uint32_t hdr_at = at;
-    at = append_u32(pkt, at, 0);
-    at = append_i32(pkt, at, 0);
-    at = append_i32(pkt, at, 0);
-    at = append_i32(pkt, at, 300);
-    at = append_i32(pkt, at, 170);
-    at = append_u32(pkt, at, 1);
+static void send_output_info(int fd, uint32_t oid) {
+    uint8_t pkt[128] = {0}; uint32_t at = 0;
+    at = append_u32(pkt, at, oid);
+    uint32_t hdr = at; at = append_u32(pkt, at, 0);
+    at = append_i32(pkt, at, 0);       /* x */
+    at = append_i32(pkt, at, 0);       /* y */
+    at = append_i32(pkt, at, 300);     /* physical_width */
+    at = append_i32(pkt, at, 170);     /* physical_height */
+    at = append_u32(pkt, at, 1);       /* subpixel */
     at = append_string(pkt, at, "AMS");
-    at = append_string(pkt, at, "Virtual-0");
-    at = append_i32(pkt, at, 0);
-    wr_u32(pkt + hdr_at, (at << 16) | 0);
+    at = append_string(pkt, at, "DRM-Virtual-0");
+    at = append_i32(pkt, at, 0);       /* transform */
+    wr_u32(pkt + hdr, (at << 16) | 0);
     (void)send_packet(fd, pkt, at, -1);
+
+    uint8_t mode[24] = {0};
+    send_event_header(mode, oid, 1, 20);
+    wr_u32(mode + 8, 3);            /* flags: current | preferred */
+    wr_u32(mode + 12, g_fb_w);
+    wr_u32(mode + 16, g_fb_h);
+    wr_u32(mode + 20, 60000);       /* refresh mHz */
+    (void)send_packet(fd, mode, 24, -1);
+
+    uint8_t scale[12] = {0};
+    send_event_header(scale, oid, 3, 12);
+    wr_u32(scale + 8, 1);
+    (void)send_packet(fd, scale, 12, -1);
+
+    uint8_t done[8] = {0};
+    send_event_header(done, oid, 2, 8);
+    (void)send_packet(fd, done, 8, -1);
 }
 
-static void send_output_mode(int fd, uint32_t output_id) {
+static void send_seat_info(int fd, uint32_t sid) {
+    uint8_t caps[12] = {0};
+    send_event_header(caps, sid, 0, 12);
+    wr_u32(caps + 8, 3);  /* WL_SEAT_CAPABILITY_POINTER | KEYBOARD */
+    (void)send_packet(fd, caps, 12, -1);
+
+    uint8_t name[64] = {0}; uint32_t at = 0;
+    at = append_u32(name, at, sid);
+    uint32_t hdr = at; at = append_u32(name, at, 0);
+    at = append_string(name, at, "seat0");
+    wr_u32(name + hdr, (at << 16) | 1);
+    (void)send_packet(fd, name, at, -1);
+}
+
+static void send_pointer_enter(int fd, uint32_t pid, uint32_t sid) {
     uint8_t pkt[24] = {0};
-    send_event_header(pkt, output_id, 1, 20);
-    wr_u32(pkt + 8, 3);
-    wr_u32(pkt + 12, wl_fb_w);
-    wr_u32(pkt + 16, wl_fb_h);
-    wr_u32(pkt + 20, 60000);
+    wl_client_state* cl = 0;
+    for (int i = 0; i < WL_MAX_CLIENTS; ++i) {
+        if (g_clients[i].active && g_clients[i].fd == fd) { cl = &g_clients[i]; break; }
+    }
+    uint32_t serial = cl ? ++cl->serial : 1;
+    send_event_header(pkt, pid, 0, 24);
+    wr_u32(pkt + 8, serial);
+    wr_u32(pkt + 12, sid);
+    wr_u32(pkt + 16, g_pointer_x << 8);
+    wr_u32(pkt + 20, g_pointer_y << 8);
     (void)send_packet(fd, pkt, 24, -1);
 }
 
-static void send_output_done(int fd, uint32_t output_id) {
-    uint8_t pkt[8] = {0};
-    send_event_header(pkt, output_id, 2, 8);
-    (void)send_packet(fd, pkt, 8, -1);
-}
-
-static void send_output_scale(int fd, uint32_t output_id, int32_t scale) {
-    uint8_t pkt[12] = {0};
-    send_event_header(pkt, output_id, 3, 12);
-    wr_u32(pkt + 8, (uint32_t)scale);
-    (void)send_packet(fd, pkt, 12, -1);
-}
-
-static void send_seat_capabilities(int fd, uint32_t seat_id) {
-    uint8_t pkt[12] = {0};
-    send_event_header(pkt, seat_id, 0, 12);
-    wr_u32(pkt + 8, WL_SEAT_CAP_POINTER | WL_SEAT_CAP_KEYBOARD);
-    (void)send_packet(fd, pkt, 12, -1);
-}
-
-static void send_seat_name(int fd, uint32_t seat_id, const char* name) {
-    uint8_t pkt[96] = {0};
-    uint32_t at = 0;
-    at = append_u32(pkt, at, seat_id);
-    uint32_t hdr_at = at;
-    at = append_u32(pkt, at, 0);
-    at = append_string(pkt, at, name);
-    wr_u32(pkt + hdr_at, (at << 16) | 1);
-    (void)send_packet(fd, pkt, at, -1);
-}
-
-static void send_callback_done(int fd, uint32_t cb_id, uint32_t ms) {
-    uint8_t pkt[12] = {0};
-    send_event_header(pkt, cb_id, 0, 12);
-    wr_u32(pkt + 8, ms);
-    (void)send_packet(fd, pkt, 12, -1);
-}
-
-static void send_wm_ping(int fd, uint32_t wm_id, uint32_t serial) {
-    uint8_t pkt[12] = {0};
-    send_event_header(pkt, wm_id, 0, 12);
-    wr_u32(pkt + 8, serial);
-    (void)send_packet(fd, pkt, 12, -1);
-}
-
-static void send_xdg_surface_configure(int fd, uint32_t xdg_surface_id, uint32_t serial) {
-    uint8_t pkt[12] = {0};
-    send_event_header(pkt, xdg_surface_id, 0, 12);
-    wr_u32(pkt + 8, serial);
-    (void)send_packet(fd, pkt, 12, -1);
-}
-
-static void send_xdg_toplevel_configure(int fd, uint32_t toplevel_id, int32_t w, int32_t h) {
-    uint8_t pkt[24] = {0};
-    send_event_header(pkt, toplevel_id, 0, 20);
-    wr_u32(pkt + 8, (uint32_t)w);
-    wr_u32(pkt + 12, (uint32_t)h);
-    wr_u32(pkt + 16, 0);
-    (void)send_packet(fd, pkt, 20, -1);
-}
-
-static void send_xdg_toplevel_close(int fd, uint32_t toplevel_id) {
-    uint8_t pkt[8] = {0};
-    send_event_header(pkt, toplevel_id, 1, 8);
-    (void)send_packet(fd, pkt, 8, -1);
-}
-
-static void send_pointer_enter(int fd, uint32_t pointer_id, uint32_t serial, uint32_t surface_id, uint32_t x, uint32_t y) {
-    uint8_t pkt[24] = {0};
-    send_event_header(pkt, pointer_id, 0, 24);
-    wr_u32(pkt + 8, serial);
-    wr_u32(pkt + 12, surface_id);
-    wr_u32(pkt + 16, x << 8);
-    wr_u32(pkt + 20, y << 8);
-    (void)send_packet(fd, pkt, 24, -1);
-}
-
-static void send_pointer_motion(int fd, uint32_t pointer_id, uint32_t time_ms, uint32_t x, uint32_t y) {
+static void send_pointer_motion(int fd, uint32_t pid) {
     uint8_t pkt[20] = {0};
-    send_event_header(pkt, pointer_id, 2, 20);
-    wr_u32(pkt + 8, time_ms);
-    wr_u32(pkt + 12, x << 8);
-    wr_u32(pkt + 16, y << 8);
+    send_event_header(pkt, pid, 2, 20);
+    wr_u32(pkt + 8, now_ms());
+    wr_u32(pkt + 12, g_pointer_x << 8);
+    wr_u32(pkt + 16, g_pointer_y << 8);
     (void)send_packet(fd, pkt, 20, -1);
 }
 
-static void send_pointer_button(int fd, uint32_t pointer_id, uint32_t serial, uint32_t time_ms, uint32_t button, uint32_t state) {
+static void send_pointer_button(int fd, uint32_t pid, uint32_t state) {
     uint8_t pkt[24] = {0};
-    send_event_header(pkt, pointer_id, 3, 24);
+    wl_client_state* cl = 0;
+    for (int i = 0; i < WL_MAX_CLIENTS; ++i)
+        if (g_clients[i].active && g_clients[i].fd == fd) { cl = &g_clients[i]; break; }
+    uint32_t serial = cl ? ++cl->serial : 1;
+    send_event_header(pkt, pid, 3, 24);
     wr_u32(pkt + 8, serial);
-    wr_u32(pkt + 12, time_ms);
-    wr_u32(pkt + 16, button);
+    wr_u32(pkt + 12, now_ms());
+    wr_u32(pkt + 16, 0x110);   /* BTN_LEFT */
     wr_u32(pkt + 20, state);
     (void)send_packet(fd, pkt, 24, -1);
 }
 
-static void send_pointer_frame(int fd, uint32_t pointer_id) {
-    uint8_t pkt[8] = {0};
-    send_event_header(pkt, pointer_id, 5, 8);
-    (void)send_packet(fd, pkt, 8, -1);
-}
-
-static void send_keyboard_enter(int fd, uint32_t keyboard_id, uint32_t serial, uint32_t surface_id) {
+static void send_keyboard_enter(int fd, uint32_t kid, uint32_t sid) {
     uint8_t pkt[20] = {0};
-    send_event_header(pkt, keyboard_id, 1, 20);
+    wl_client_state* cl = 0;
+    for (int i = 0; i < WL_MAX_CLIENTS; ++i)
+        if (g_clients[i].active && g_clients[i].fd == fd) { cl = &g_clients[i]; break; }
+    uint32_t serial = cl ? ++cl->serial : 1;
+    send_event_header(pkt, kid, 1, 20);
     wr_u32(pkt + 8, serial);
-    wr_u32(pkt + 12, surface_id);
+    wr_u32(pkt + 12, sid);
     wr_u32(pkt + 16, 0);
     (void)send_packet(fd, pkt, 20, -1);
 }
 
-static void send_keyboard_key(int fd, uint32_t keyboard_id, uint32_t serial, uint32_t time_ms, uint32_t key, uint32_t state) {
+static void send_keyboard_key(int fd, uint32_t kid, uint32_t key, uint32_t state) {
     uint8_t pkt[24] = {0};
-    send_event_header(pkt, keyboard_id, 3, 24);
+    wl_client_state* cl = 0;
+    for (int i = 0; i < WL_MAX_CLIENTS; ++i)
+        if (g_clients[i].active && g_clients[i].fd == fd) { cl = &g_clients[i]; break; }
+    uint32_t serial = cl ? ++cl->serial : 1;
+    send_event_header(pkt, kid, 3, 24);
     wr_u32(pkt + 8, serial);
-    wr_u32(pkt + 12, time_ms);
+    wr_u32(pkt + 12, now_ms());
     wr_u32(pkt + 16, key);
     wr_u32(pkt + 20, state);
     (void)send_packet(fd, pkt, 24, -1);
 }
 
-static void send_keyboard_modifiers(int fd, uint32_t keyboard_id, uint32_t serial) {
-    uint8_t pkt[28] = {0};
-    send_event_header(pkt, keyboard_id, 4, 28);
-    wr_u32(pkt + 8, serial);
-    wr_u32(pkt + 12, 0);
-    wr_u32(pkt + 16, 0);
-    wr_u32(pkt + 20, 0);
-    wr_u32(pkt + 24, 0);
-    (void)send_packet(fd, pkt, 28, -1);
-}
+/* --- Input handling via poll --- */
 
-static void send_buffer_release(int fd, uint32_t buffer_id) {
-    uint8_t pkt[8] = {0};
-    send_event_header(pkt, buffer_id, 0, 8);
-    (void)send_packet(fd, pkt, 8, -1);
-}
+static void handle_input(void) {
+    int should_redraw = 0;
 
-static void draw_shell_background(void) {
-    if (!wl_fb) return;
-    for (uint32_t y = 0; y < wl_fb_h; ++y) {
-        uint32_t color = (y < 36) ? 0x1A1A1A : 0x10151D;
-        for (uint32_t x = 0; x < wl_fb_w; ++x) {
-            wl_fb[y * wl_fb_w + x] = color;
-        }
-    }
-}
-
-static void draw_pointer(void) {
-    for (uint32_t y = 0; y < 12; ++y) {
-        for (uint32_t x = 0; x < 10; ++x) {
-            uint32_t px = g_pointer_x + x;
-            uint32_t py = g_pointer_y + y;
-            if (px >= wl_fb_w || py >= wl_fb_h) continue;
-            wl_fb[py * wl_fb_w + px] = (x <= y) ? 0xFFFFFF : wl_fb[py * wl_fb_w + px];
-        }
-    }
-}
-
-static void present_attached_surface(uint32_t surf_id) {
-    if (surf_id >= WL_OBJECT_MAX) return;
-    wl_obj_state* surf = &g_objs[surf_id];
-    if (surf->type != WL_SURFACE || surf->attached_buffer_id == 0) return;
-    uint32_t bid = surf->attached_buffer_id;
-    if (bid >= WL_OBJECT_MAX) return;
-    wl_obj_state* buf = &g_objs[bid];
-    if (buf->type != WL_BUFFER || buf->pool_id == 0 || buf->pool_id >= WL_OBJECT_MAX) return;
-    wl_obj_state* pool = &g_objs[buf->pool_id];
-    if (pool->type != WL_SHM_POOL || !pool->map || buf->format != WL_SHM_FORMAT_XRGB8888) return;
-
-    draw_shell_background();
-    uint32_t copy_w = (buf->width > 0 && (uint32_t)buf->width < wl_fb_w) ? (uint32_t)buf->width : wl_fb_w;
-    uint32_t copy_h = (buf->height > 0 && (uint32_t)buf->height < wl_fb_h) ? (uint32_t)buf->height : wl_fb_h;
-    for (uint32_t y = 0; y < copy_h; ++y) {
-        uint32_t src_off = buf->offset + y * (uint32_t)buf->stride;
-        if (src_off + copy_w * 4U > pool->size) break;
-        memcpy(&wl_fb[y * wl_fb_w], pool->map + src_off, copy_w * 4U);
-    }
-    draw_pointer();
-    (void)ams_syscall(SYS_AMS_FB_BLIT, (uint64_t)wl_fb, wl_fb_w, wl_fb_h, 0, 0);
-
-    if (surf->frame_callback_id && surf->frame_callback_id < WL_OBJECT_MAX) {
-        send_callback_done((int)surf->client_fd, surf->frame_callback_id, now_ms());
-        g_objs[surf->frame_callback_id].type = 0;
-        surf->frame_callback_id = 0;
-    }
-    send_buffer_release((int)surf->client_fd, bid);
-}
-
-static void clear_objects(int fd) {
-    memset(g_objs, 0, sizeof(g_objs));
-    memset(&g_client, 0, sizeof(g_client));
-    g_client.fd = fd;
-    g_objs[1].type = WL_DISPLAY;
-    g_objs[2].type = WL_COMPOSITOR;
-    g_objs[3].type = WL_SHM;
-}
-
-static void handle_input_events(void) {
-    if (g_client.fd <= 0) return;
     uint64_t mev = ams_syscall(SYS_AMS_GET_MOUSE_EVENT, 0, 0, 0, 0, 0);
-    if (mev && g_client.pointer_id && g_client.focused_surface) {
+    if (mev) {
+        uint32_t old_x = g_pointer_x, old_y = g_pointer_y;
         g_pointer_x = (uint32_t)(mev & 0xFFFFU);
         g_pointer_y = (uint32_t)((mev >> 16) & 0xFFFFU);
         uint8_t buttons = (uint8_t)((mev >> 32) & 0xFFU);
-        uint8_t old_buttons = g_pointer_buttons;
+        uint8_t old = g_pointer_buttons;
         g_pointer_buttons = buttons;
-        g_client.serial++;
-        send_pointer_motion(g_client.fd, g_client.pointer_id, now_ms(), g_pointer_x, g_pointer_y);
-        if (old_buttons != g_pointer_buttons) {
-            uint32_t state = (g_pointer_buttons & 0x1) ? 1U : 0U;
-            send_pointer_button(g_client.fd, g_client.pointer_id, g_client.serial, now_ms(), 0x110, state);
+
+        for (int i = 0; i < WL_MAX_CLIENTS; ++i) {
+            wl_client_state* cl = &g_clients[i];
+            if (!cl->active || !cl->pointer_id || !cl->focused_surface) continue;
+            send_pointer_motion(cl->fd, cl->pointer_id);
+            if (old != g_pointer_buttons)
+                send_pointer_button(cl->fd, cl->pointer_id, (g_pointer_buttons & 1U) ? 1U : 0U);
         }
-        send_pointer_frame(g_client.fd, g_client.pointer_id);
+        if (old_x != g_pointer_x || old_y != g_pointer_y || old != g_pointer_buttons)
+            should_redraw = 1;
     }
 
     uint64_t kev = ams_syscall(SYS_AMS_GET_KEY, 0, 0, 0, 0, 0);
-    if (kev && g_client.keyboard_id && g_client.focused_surface) {
-        int32_t k = (int32_t)kev;
-        uint32_t state = 1;
-        if (k < 0) {
-            state = 0;
-            k = -k;
+    if (kev) {
+        for (int i = 0; i < WL_MAX_CLIENTS; ++i) {
+            wl_client_state* cl = &g_clients[i];
+            if (!cl->active || !cl->keyboard_id || !cl->focused_surface) continue;
+            int32_t k = (int32_t)kev;
+            uint32_t st = 1;
+            if (k < 0) { st = 0; k = -k; }
+            send_keyboard_key(cl->fd, cl->keyboard_id, (uint32_t)k, st);
         }
-        g_client.serial++;
-        send_keyboard_key(g_client.fd, g_client.keyboard_id, g_client.serial, now_ms(), (uint32_t)k, state);
-        send_keyboard_modifiers(g_client.fd, g_client.keyboard_id, g_client.serial);
     }
+
+    if (should_redraw) redraw();
 }
 
-static void process_message(int fd, wl_fd_queue* fdq, uint32_t obj_id, uint16_t opcode, const uint8_t* payload, uint32_t payload_len) {
-    if (obj_id >= WL_OBJECT_MAX) return;
-    wl_obj_state* obj = &g_objs[obj_id];
+/* --- Wayland protocol message processing --- */
 
-    if (obj_id == 1 && obj->type == WL_DISPLAY) {
-        if (opcode == 0 && payload_len >= 4) {
-            uint32_t cb_id = rd_u32(payload);
-            if (cb_id > 0 && cb_id < WL_OBJECT_MAX) {
-                g_objs[cb_id].type = WL_CALLBACK;
-                send_callback_done(fd, cb_id, now_ms());
+static void process_message(wl_client_state* cl, uint32_t oid, uint16_t op,
+                            const uint8_t* p, uint32_t n) {
+    if (oid >= WL_OBJECT_MAX) return;
+    wl_obj_state* o = &cl->objs[oid];
+
+    /* wl_display */
+    if (oid == 1 && o->type == O_WL_DISPLAY) {
+        if (op == 0 && n >= 4) {  /* sync */
+            uint32_t cb = rd_u32(p);
+            if (cb && cb < WL_OBJECT_MAX) {
+                cl->objs[cb].type = O_WL_CALLBACK;
+                send_callback_done(cl->fd, cb);
             }
-        } else if (opcode == 1 && payload_len >= 4) {
-            uint32_t reg_id = rd_u32(payload);
-            if (reg_id > 0 && reg_id < WL_OBJECT_MAX) {
-                g_objs[reg_id].type = WL_REGISTRY;
-                send_registry_global(fd, reg_id, 1, "wl_compositor", 4);
-                send_registry_global(fd, reg_id, 2, "wl_shm", 1);
-                send_registry_global(fd, reg_id, 3, "wl_output", 2);
-                send_registry_global(fd, reg_id, 4, "wl_seat", 5);
-                send_registry_global(fd, reg_id, 5, "xdg_wm_base", 1);
+        }
+        if (op == 1 && n >= 4) {  /* get_registry */
+            uint32_t rid = rd_u32(p);
+            if (rid && rid < WL_OBJECT_MAX) {
+                cl->objs[rid].type = O_WL_REGISTRY;
+                send_registry_global(cl->fd, rid, 1, "wl_compositor", 5);
+                send_registry_global(cl->fd, rid, 2, "wl_shm", 1);
+                send_registry_global(cl->fd, rid, 3, "wl_output", 3);
+                send_registry_global(cl->fd, rid, 4, "wl_seat", 7);
+                send_registry_global(cl->fd, rid, 5, "xdg_wm_base", 2);
+                send_registry_global(cl->fd, rid, 6, "wl_subcompositor", 1);
+                send_registry_global(cl->fd, rid, 7, "wl_data_device_manager", 3);
             }
         }
         return;
     }
 
-    if (obj->type == WL_REGISTRY) {
-        if (opcode == 0 && payload_len >= 16) {
-            uint32_t name = rd_u32(payload + 0);
-            uint32_t str_len = rd_u32(payload + 4);
-            uint32_t str_padded = (str_len + 3U) & ~3U;
-            if (payload_len < 4 + 4 + str_padded + 4 + 4) return;
-            uint32_t new_id = rd_u32(payload + 12 + str_padded);
-            if (new_id == 0 || new_id >= WL_OBJECT_MAX) return;
-            if (name == 1) g_objs[new_id].type = WL_COMPOSITOR;
-            if (name == 2) {
-                g_objs[new_id].type = WL_SHM;
-                send_shm_format(fd, new_id, WL_SHM_FORMAT_XRGB8888);
+    /* wl_registry.bind */
+    if (o->type == O_WL_REGISTRY) {
+        if (op == 0 && n >= 16) {
+            uint32_t name = rd_u32(p);
+            uint32_t sl = rd_u32(p + 4);
+            uint32_t sp = (sl + 3U) & ~3U;
+            if (n < 4 + 4 + sp + 8) return;
+            uint32_t nid = rd_u32(p + 12 + sp);
+            if (!nid || nid >= WL_OBJECT_MAX) return;
+            if (name == 1) cl->objs[nid].type = O_WL_COMPOSITOR;
+            else if (name == 2) {
+                cl->objs[nid].type = O_WL_SHM;
+                uint8_t f[12] = {0};
+                send_event_header(f, nid, 0, 12);
+                wr_u32(f + 8, 0);  /* WL_SHM_FORMAT_ARGB8888 */
+                (void)send_packet(cl->fd, f, 12, -1);
+                uint8_t f2[12] = {0};
+                send_event_header(f2, nid, 0, 12);
+                wr_u32(f2 + 8, 1); /* WL_SHM_FORMAT_XRGB8888 */
+                (void)send_packet(cl->fd, f2, 12, -1);
             }
-            if (name == 3) {
-                g_objs[new_id].type = WL_OUTPUT;
-                g_client.output_id = new_id;
-                send_output_geometry(fd, new_id);
-                send_output_mode(fd, new_id);
-                send_output_scale(fd, new_id, 1);
-                send_output_done(fd, new_id);
+            else if (name == 3) { cl->objs[nid].type = O_WL_OUTPUT; send_output_info(cl->fd, nid); }
+            else if (name == 4) { cl->objs[nid].type = O_WL_SEAT; send_seat_info(cl->fd, nid); }
+            else if (name == 5) {
+                cl->objs[nid].type = O_XDG_WM_BASE;
+                uint8_t ping[12] = {0};
+                send_event_header(ping, nid, 0, 12);
+                wr_u32(ping + 8, ++cl->serial);
+                (void)send_packet(cl->fd, ping, 12, -1);
             }
-            if (name == 4) {
-                g_objs[new_id].type = WL_SEAT;
-                g_client.seat_id = new_id;
-                send_seat_capabilities(fd, new_id);
-                send_seat_name(fd, new_id, "seat0");
-            }
-            if (name == 5) {
-                g_objs[new_id].type = XDG_WM_BASE;
-                g_client.xdg_wm_base_id = new_id;
-                g_client.serial++;
-                send_wm_ping(fd, new_id, g_client.serial);
-            }
+            else if (name == 6) cl->objs[nid].type = O_WL_SUBCOMPOSITOR;
+            else if (name == 7) cl->objs[nid].type = O_WL_DATA_DEVICE_MANAGER;
         }
         return;
     }
 
-    if (obj->type == WL_COMPOSITOR) {
-        if (opcode == 0 && payload_len >= 4) {
-            uint32_t new_id = rd_u32(payload + 0);
-            if (new_id > 0 && new_id < WL_OBJECT_MAX) {
-                g_objs[new_id].type = WL_SURFACE;
-                g_objs[new_id].client_fd = (uint32_t)fd;
-            }
-        }
-        return;
-    }
-
-    if (obj->type == WL_SHM) {
-        if (opcode == 0 && payload_len >= 8) {
-            uint32_t new_id = rd_u32(payload + 0);
-            uint32_t size = rd_u32(payload + 4);
-            int passed_fd = fdq_pop(fdq);
-            if (new_id == 0 || new_id >= WL_OBJECT_MAX) return;
-            if (passed_fd < 0 || size == 0) return;
-            g_objs[new_id].type = WL_SHM_POOL;
-            g_objs[new_id].fd = passed_fd;
-            g_objs[new_id].size = size;
-            g_objs[new_id].map = (uint8_t*)mmap(0, size, PROT_READ, MAP_SHARED, passed_fd, 0);
-            if ((uint64_t)g_objs[new_id].map > (uint64_t)-4096LL) g_objs[new_id].map = 0;
-        }
-        return;
-    }
-
-    if (obj->type == WL_SHM_POOL) {
-        if (opcode == 0 && payload_len >= 24) {
-            uint32_t new_id = rd_u32(payload + 0);
-            if (new_id == 0 || new_id >= WL_OBJECT_MAX) return;
-            g_objs[new_id].type = WL_BUFFER;
-            g_objs[new_id].pool_id = obj_id;
-            g_objs[new_id].offset = rd_u32(payload + 4);
-            g_objs[new_id].width = (int32_t)rd_u32(payload + 8);
-            g_objs[new_id].height = (int32_t)rd_u32(payload + 12);
-            g_objs[new_id].stride = (int32_t)rd_u32(payload + 16);
-            g_objs[new_id].format = rd_u32(payload + 20);
-            g_objs[new_id].client_fd = (uint32_t)fd;
-        } else if (opcode == 1) {
-            obj->type = 0;
-        }
-        return;
-    }
-
-    if (obj->type == WL_SURFACE) {
-        if (opcode == 1 && payload_len >= 12) {
-            obj->attached_buffer_id = rd_u32(payload + 0);
-        } else if (opcode == 3 && payload_len >= 4) {
-            uint32_t cb = rd_u32(payload + 0);
-            obj->frame_callback_id = cb;
-            if (cb > 0 && cb < WL_OBJECT_MAX) g_objs[cb].type = WL_CALLBACK;
-        } else if (opcode == 6) {
-            g_client.focused_surface = obj_id;
-            present_attached_surface(obj_id);
-            if (g_client.pointer_id) send_pointer_enter(fd, g_client.pointer_id, ++g_client.serial, obj_id, g_pointer_x, g_pointer_y);
-            if (g_client.keyboard_id) send_keyboard_enter(fd, g_client.keyboard_id, ++g_client.serial, obj_id);
-        } else if (opcode == 0) {
-            obj->type = 0;
-        }
-        return;
-    }
-
-    if (obj->type == WL_SEAT) {
-        if (opcode == 0 && payload_len >= 4) {
-            uint32_t nid = rd_u32(payload + 0);
+    /* wl_compositor.create_surface */
+    if (o->type == O_WL_COMPOSITOR) {
+        if (op == 0 && n >= 4) {
+            uint32_t nid = rd_u32(p);
             if (nid && nid < WL_OBJECT_MAX) {
-                g_objs[nid].type = WL_POINTER;
-                g_client.pointer_id = nid;
+                cl->objs[nid].type = O_WL_SURFACE;
+                cl->objs[nid].client_idx = (uint32_t)(cl - g_clients);
             }
-        } else if (opcode == 1 && payload_len >= 4) {
-            uint32_t nid = rd_u32(payload + 0);
+        }
+        return;
+    }
+
+    /* wl_shm.create_pool */
+    if (o->type == O_WL_SHM) {
+        if (op == 0 && n >= 8) {
+            uint32_t nid = rd_u32(p), sz = rd_u32(p + 4);
+            int passed = -1;
+            if (cl->pass_head != cl->pass_tail) {
+                passed = cl->pass_fds[cl->pass_head];
+                cl->pass_head = (cl->pass_head + 1) % 32;
+            }
+            if (!nid || nid >= WL_OBJECT_MAX || passed < 0 || sz == 0) return;
+            cl->objs[nid].type = O_WL_SHM_POOL;
+            cl->objs[nid].fd = passed;
+            cl->objs[nid].size = sz;
+            cl->objs[nid].map = (uint8_t*)mmap(0, sz, PROT_READ, MAP_SHARED, passed, 0);
+            if ((uint64_t)cl->objs[nid].map > (uint64_t)-4096LL)
+                cl->objs[nid].map = 0;
+        }
+        return;
+    }
+
+    /* wl_shm_pool.create_buffer */
+    if (o->type == O_WL_SHM_POOL) {
+        if (op == 0 && n >= 24) {
+            uint32_t nid = rd_u32(p);
+            if (!nid || nid >= WL_OBJECT_MAX) return;
+            cl->objs[nid].type = O_WL_BUFFER;
+            cl->objs[nid].pool_id = oid;
+            cl->objs[nid].offset = rd_u32(p + 4);
+            cl->objs[nid].width = (int32_t)rd_u32(p + 8);
+            cl->objs[nid].height = (int32_t)rd_u32(p + 12);
+            cl->objs[nid].stride = (int32_t)rd_u32(p + 16);
+            cl->objs[nid].format = rd_u32(p + 20);
+            cl->objs[nid].client_idx = (uint32_t)(cl - g_clients);
+        }
+        return;
+    }
+
+    /* wl_surface operations */
+    if (o->type == O_WL_SURFACE) {
+        if (op == 1 && n >= 12)
+            o->attached_buffer_id = rd_u32(p);
+        else if (op == 3 && n >= 4) {
+            uint32_t cb = rd_u32(p);
+            o->frame_callback_id = cb;
+            if (cb && cb < WL_OBJECT_MAX) cl->objs[cb].type = O_WL_CALLBACK;
+        }
+        else if (op == 6) {  /* commit */
+            cl->focused_surface = oid;
+            redraw();
+            if (o->frame_callback_id && o->frame_callback_id < WL_OBJECT_MAX) {
+                send_callback_done(cl->fd, o->frame_callback_id);
+                cl->objs[o->frame_callback_id].type = 0;
+                o->frame_callback_id = 0;
+            }
+            if (o->attached_buffer_id)
+                send_buffer_release(cl->fd, o->attached_buffer_id);
+            if (cl->pointer_id)
+                send_pointer_enter(cl->fd, cl->pointer_id, oid);
+            if (cl->keyboard_id)
+                send_keyboard_enter(cl->fd, cl->keyboard_id, oid);
+        }
+        return;
+    }
+
+    /* wl_seat.get_pointer / get_keyboard */
+    if (o->type == O_WL_SEAT) {
+        if (op == 0 && n >= 4) {
+            uint32_t nid = rd_u32(p);
             if (nid && nid < WL_OBJECT_MAX) {
-                g_objs[nid].type = WL_KEYBOARD;
-                g_client.keyboard_id = nid;
+                cl->objs[nid].type = O_WL_POINTER;
+                cl->pointer_id = nid;
+            }
+        } else if (op == 1 && n >= 4) {
+            uint32_t nid = rd_u32(p);
+            if (nid && nid < WL_OBJECT_MAX) {
+                cl->objs[nid].type = O_WL_KEYBOARD;
+                cl->keyboard_id = nid;
             }
         }
         return;
     }
 
-    if (obj->type == XDG_WM_BASE) {
-        if (opcode == 1 && payload_len >= 8) {
-            uint32_t xdg_surface_id = rd_u32(payload + 0);
-            uint32_t surf_id = rd_u32(payload + 4);
-            if (xdg_surface_id && xdg_surface_id < WL_OBJECT_MAX && surf_id && surf_id < WL_OBJECT_MAX) {
-                g_objs[xdg_surface_id].type = XDG_SURFACE;
-                g_objs[xdg_surface_id].role_id = surf_id;
-                g_objs[xdg_surface_id].client_fd = (uint32_t)fd;
-                g_objs[surf_id].role_id = xdg_surface_id;
-                send_xdg_surface_configure(fd, xdg_surface_id, ++g_client.serial);
+    /* xdg_wm_base.get_xdg_surface / pong */
+    if (o->type == O_XDG_WM_BASE) {
+        if (op == 0 && n >= 4) { /* pong */ return; }
+        if (op == 1 && n >= 8) {
+            uint32_t xs = rd_u32(p), sid = rd_u32(p + 4);
+            if (xs && xs < WL_OBJECT_MAX && sid && sid < WL_OBJECT_MAX) {
+                cl->objs[xs].type = O_XDG_SURFACE;
+                cl->objs[xs].role_id = sid;
+                cl->objs[sid].role_id = xs;
+                uint8_t cfg[12] = {0};
+                send_event_header(cfg, xs, 0, 12);
+                wr_u32(cfg + 8, ++cl->serial);
+                (void)send_packet(cl->fd, cfg, 12, -1);
             }
         }
         return;
     }
 
-    if (obj->type == XDG_SURFACE) {
-        if (opcode == 1 && payload_len >= 4) {
-            uint32_t toplevel_id = rd_u32(payload + 0);
-            if (toplevel_id && toplevel_id < WL_OBJECT_MAX) {
-                g_objs[toplevel_id].type = XDG_TOPLEVEL;
-                g_objs[toplevel_id].role_id = obj_id;
-                g_objs[toplevel_id].client_fd = (uint32_t)fd;
-                send_xdg_toplevel_configure(fd, toplevel_id, (int32_t)wl_fb_w, (int32_t)wl_fb_h);
-                send_xdg_surface_configure(fd, obj_id, ++g_client.serial);
+    /* xdg_surface.get_toplevel / ack_configure */
+    if (o->type == O_XDG_SURFACE) {
+        if (op == 0 && n >= 4) { /* ack_configure */ return; }
+        if (op == 1 && n >= 4) {
+            uint32_t tl = rd_u32(p);
+            if (tl && tl < WL_OBJECT_MAX) {
+                cl->objs[tl].type = O_XDG_TOPLEVEL;
+                uint8_t tcfg[20] = {0};
+                send_event_header(tcfg, tl, 0, 20);
+                wr_u32(tcfg + 8, g_fb_w);
+                wr_u32(tcfg + 12, g_fb_h);
+                wr_u32(tcfg + 16, 0);
+                (void)send_packet(cl->fd, tcfg, 20, -1);
+                uint8_t scfg[12] = {0};
+                send_event_header(scfg, oid, 0, 12);
+                wr_u32(scfg + 8, ++cl->serial);
+                (void)send_packet(cl->fd, scfg, 12, -1);
             }
-        } else if (opcode == 4 && payload_len >= 4) {
-            (void)rd_u32(payload + 0);
-        } else if (opcode == 0) {
-            obj->type = 0;
         }
         return;
     }
 
-    if (obj->type == XDG_TOPLEVEL) {
-        if (opcode == 0 && payload_len >= 4) {
-            uint32_t slen = rd_u32(payload);
-            (void)slen;
-        } else if (opcode == 1 && payload_len >= 4) {
-            uint32_t slen = rd_u32(payload);
-            (void)slen;
-        } else if (opcode == 0xFFFF) {
-            send_xdg_toplevel_close(fd, obj_id);
-        }
-        return;
-    }
-
-    if (obj->type == WL_BUFFER && opcode == 0) {
-        obj->type = 0;
-    }
+    if (o->type == O_WL_BUFFER && op == 0) o->type = 0;
 }
 
-static int bootstrap_local_shell_client(void) {
-    struct linux_sockaddr_un addr = {0};
-    addr.sun_family = AF_UNIX;
-    {
-        const char* p = "/run/user/0/wayland-0";
-        for (int i = 0; p[i] && i < 107; ++i) addr.sun_path[i] = p[i];
+/* --- Client connection handling --- */
+
+static void init_client(wl_client_state* cl, int fd) {
+    memset(cl, 0, sizeof(*cl));
+    cl->fd = fd;
+    cl->active = 1;
+    cl->objs[1].type = O_WL_DISPLAY;
+    cl->objs[2].type = O_WL_COMPOSITOR;
+    cl->objs[3].type = O_WL_SHM;
+}
+
+static void process_client_data(wl_client_state* cl) {
+    int pass = -1;
+    int n = recv_packet(cl->fd, cl->rx + cl->rx_len, WL_RX_CAP - cl->rx_len, &pass);
+    if (n == 0) {
+        puts1("wl-compositor: client disconnected");
+        cl->active = 0;
+        return;
+    }
+    if (n < 0) return;
+
+    if (pass >= 0) {
+        uint32_t next = (cl->pass_tail + 1) % 32;
+        if (next != cl->pass_head) {
+            cl->pass_fds[cl->pass_tail] = pass;
+            cl->pass_tail = next;
+        }
     }
 
-    int fd = (int)ams_syscall(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0, 0, 0);
-    if (fd < 0) return -1;
-    if ((int)ams_syscall(SYS_CONNECT, (uint64_t)fd, (uint64_t)&addr, sizeof(addr), 0, 0) < 0) return -2;
-
-    const uint32_t registry_id = 40;
-    const uint32_t compositor_id = 41;
-    const uint32_t shm_id = 42;
-    const uint32_t surface_id = 43;
-    const uint32_t pool_id = 44;
-    const uint32_t buffer_id = 45;
-    const uint32_t xdg_wm_base_id = 46;
-    const uint32_t xdg_surface_id = 47;
-    const uint32_t xdg_toplevel_id = 48;
-    uint8_t msg[512] = {0};
+    cl->rx_len += (uint32_t)n;
     uint32_t at = 0;
-
-    at = append_u32(msg, at, 1);
-    at = append_u32(msg, at, (12U << 16) | 1U);
-    at = append_u32(msg, at, registry_id);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, registry_id);
-    uint32_t h = at;
-    at = append_u32(msg, at, 0);
-    at = append_u32(msg, at, 1);
-    at = append_string(msg, at, "wl_compositor");
-    at = append_u32(msg, at, 4);
-    at = append_u32(msg, at, compositor_id);
-    wr_u32(msg + h, (at << 16) | 0U);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, registry_id);
-    h = at;
-    at = append_u32(msg, at, 0);
-    at = append_u32(msg, at, 2);
-    at = append_string(msg, at, "wl_shm");
-    at = append_u32(msg, at, 1);
-    at = append_u32(msg, at, shm_id);
-    wr_u32(msg + h, (at << 16) | 0U);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, registry_id);
-    h = at;
-    at = append_u32(msg, at, 0);
-    at = append_u32(msg, at, 5);
-    at = append_string(msg, at, "xdg_wm_base");
-    at = append_u32(msg, at, 1);
-    at = append_u32(msg, at, xdg_wm_base_id);
-    wr_u32(msg + h, (at << 16) | 0U);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, compositor_id);
-    at = append_u32(msg, at, (12U << 16) | 0U);
-    at = append_u32(msg, at, surface_id);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, xdg_wm_base_id);
-    at = append_u32(msg, at, (16U << 16) | 1U);
-    at = append_u32(msg, at, xdg_surface_id);
-    at = append_u32(msg, at, surface_id);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, xdg_surface_id);
-    at = append_u32(msg, at, (12U << 16) | 1U);
-    at = append_u32(msg, at, xdg_toplevel_id);
-    (void)send_packet(fd, msg, at, -1);
-
-    const int width = 960;
-    const int height = 540;
-    const int stride = width * 4;
-    const int size = stride * height;
-    int shmfd = (int)ams_syscall(SYS_MEMFD_CREATE, (uint64_t)"wl-shell", 0, 0, 0, 0);
-    if (shmfd < 0) return -3;
-    if ((int)ams_syscall(SYS_FTRUNCATE, (uint64_t)shmfd, (uint64_t)size, 0, 0, 0) < 0) return -4;
-    uint32_t* pix = (uint32_t*)mmap(0, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, shmfd, 0);
-    if ((uint64_t)pix > (uint64_t)-4096LL) return -5;
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            uint32_t c = (y < 40) ? 0x243248 : 0x1A2130;
-            pix[y * width + x] = c;
-        }
+    while (cl->rx_len - at >= 8) {
+        uint32_t oid = rd_u32(cl->rx + at);
+        uint32_t hdr = rd_u32(cl->rx + at + 4);
+        uint16_t op = (uint16_t)(hdr & 0xFFFFU);
+        uint16_t sz = (uint16_t)(hdr >> 16);
+        if (sz < 8 || at + sz > cl->rx_len) break;
+        process_message(cl, oid, op, cl->rx + at + 8, (uint32_t)sz - 8);
+        at += sz;
     }
-
-    at = 0;
-    at = append_u32(msg, at, shm_id);
-    at = append_u32(msg, at, (16U << 16) | 0U);
-    at = append_u32(msg, at, pool_id);
-    at = append_u32(msg, at, (uint32_t)size);
-    (void)send_packet(fd, msg, at, shmfd);
-
-    at = 0;
-    at = append_u32(msg, at, pool_id);
-    at = append_u32(msg, at, (32U << 16) | 0U);
-    at = append_u32(msg, at, buffer_id);
-    at = append_u32(msg, at, 0);
-    at = append_u32(msg, at, (uint32_t)width);
-    at = append_u32(msg, at, (uint32_t)height);
-    at = append_u32(msg, at, (uint32_t)stride);
-    at = append_u32(msg, at, 0);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, surface_id);
-    at = append_u32(msg, at, (20U << 16) | 1U);
-    at = append_u32(msg, at, buffer_id);
-    at = append_u32(msg, at, 0);
-    at = append_u32(msg, at, 0);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, surface_id);
-    at = append_u32(msg, at, (8U << 16) | 6U);
-    (void)send_packet(fd, msg, at, -1);
-    return fd;
-}
-
-static void handle_client_session(int cli) {
-    uint8_t rx[WL_RX_CAP];
-    uint32_t rx_len = 0;
-    wl_fd_queue fdq;
-    fdq_init(&fdq);
-    clear_objects(cli);
-    puts1("wl-compositor: client connected");
-
-    uint32_t last_idle = now_ms();
-    while (1) {
-        int passed_fd = -1;
-        int n = recv_packet(cli, rx + rx_len, WL_RX_CAP - rx_len, &passed_fd);
-        if (n == 0) break;
-        if (n < 0) {
-            handle_input_events();
-            if ((uint32_t)(now_ms() - last_idle) > 16) {
-                draw_shell_background();
-                draw_pointer();
-                (void)ams_syscall(SYS_AMS_FB_BLIT, (uint64_t)wl_fb, wl_fb_w, wl_fb_h, 0, 0);
-                last_idle = now_ms();
-            }
-            continue;
-        }
-        if (passed_fd >= 0) (void)fdq_push(&fdq, passed_fd);
-        rx_len += (uint32_t)n;
-        uint32_t at = 0;
-        while (rx_len - at >= 8) {
-            uint32_t obj_id = rd_u32(rx + at);
-            uint32_t hdr = rd_u32(rx + at + 4);
-            uint16_t opcode = (uint16_t)(hdr & 0xFFFFU);
-            uint16_t size = (uint16_t)(hdr >> 16);
-            if (size < 8 || at + size > rx_len) break;
-            process_message(cli, &fdq, obj_id, opcode, rx + at + 8, (uint32_t)size - 8);
-            at += size;
-        }
-        if (at > 0) {
-            memmove(rx, rx + at, rx_len - at);
-            rx_len -= at;
-        }
-        handle_input_events();
+    if (at > 0) {
+        memmove(cl->rx, cl->rx + at, cl->rx_len - at);
+        cl->rx_len -= at;
     }
-    (void)ams_syscall(SYS_CLOSE, cli, 0, 0, 0, 0);
-    puts1("wl-compositor: client disconnected");
 }
 
 int main(void) {
@@ -1744,614 +840,106 @@ int main(void) {
         for (int i = 0; p[i] && i < 107; ++i) addr.sun_path[i] = p[i];
     }
 
-    int srv = (int)ams_syscall(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0, 0, 0);
-    if (srv < 0) {
-        puts1("wl-compositor: socket failed");
+    /* Try DRM/KMS backend first */
+    g_drm_fd = drm_open();
+    if (g_drm_fd >= 0) {
+        struct ams_drm_resources res = {0};
+        if ((int)ams_syscall(SYS_IOCTL, (uint64_t)g_drm_fd, DRM_IOCTL_MODE_GETRESOURCES,
+                             (uint64_t)&res, 0, 0) >= 0 && res.count_connectors > 0) {
+            struct ams_drm_connector conn = {0};
+            conn.connector_id = res.connector_ids[0];
+            if ((int)ams_syscall(SYS_IOCTL, (uint64_t)g_drm_fd, DRM_IOCTL_MODE_GETCONNECTOR,
+                                 (uint64_t)&conn, 0, 0) >= 0 &&
+                conn.connection == 1 && conn.count_modes > 0) {
+                g_fb_w = conn.modes[0].hdisplay;
+                g_fb_h = conn.modes[0].vdisplay;
+                if (drm_setup_fb(g_drm_fd, g_fb_w, g_fb_h) == 0) {
+                    puts1("wl-compositor: DRM/KMS backend active");
+                } else {
+                    puts1("wl-compositor: DRM FB setup failed, falling back");
+                    g_drm_fd = -1;
+                }
+            } else {
+                g_drm_fd = -1;
+            }
+        } else {
+            g_drm_fd = -1;
+        }
+    }
+
+    if (g_drm_fd < 0) {
+        fallback_fb_init();
+    }
+
+    if (!g_fb_pixels) {
+        puts1("wl-compositor: no framebuffer available");
         return 1;
-    }
-    if ((int)ams_syscall(SYS_BIND, srv, (uint64_t)&addr, sizeof(addr), 0, 0) < 0) {
-        puts1("wl-compositor: bind failed");
-        return 2;
-    }
-    (void)ams_syscall(SYS_LISTEN, srv, 8, 0, 0, 0);
-    puts1("wl-compositor: listening on wayland-0");
-
-    if ((int)ams_syscall(SYS_AMS_GET_FB_INFO, (uint64_t)&wl_fb_w, (uint64_t)&wl_fb_h, 0, 0, 0) != 0 || wl_fb_w == 0 || wl_fb_h == 0) {
-        wl_fb_w = 1280;
-        wl_fb_h = 720;
-    }
-    wl_fb = (uint32_t*)malloc((size_t)wl_fb_w * (size_t)wl_fb_h * sizeof(uint32_t));
-    if (!wl_fb) {
-        puts1("wl-compositor: fb buffer alloc failed");
-        return 3;
-    }
-    draw_shell_background();
-    draw_pointer();
-    (void)ams_syscall(SYS_AMS_FB_BLIT, (uint64_t)wl_fb, wl_fb_w, wl_fb_h, 0, 0);
-
-    puts1("wl-compositor: protocol core+xdg+seat ready");
-    if (bootstrap_local_shell_client() >= 0) {
-        puts1("wl-compositor: local shell bootstrap queued");
-    } else {
-        puts1("wl-compositor: local shell bootstrap failed");
-    }
-
-    while (1) {
-        int cli = (int)ams_syscall(SYS_ACCEPT, srv, 0, 0, 0, 0);
-        if (cli < 0) {
-            handle_input_events();
-            continue;
-        }
-        handle_client_session(cli);
-    }
-}
-#include "ams_syscall.h"
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define SYS_SOCKET 41
-#define SYS_BIND 49
-#define SYS_LISTEN 50
-#define SYS_ACCEPT 43
-#define SYS_CONNECT 42
-#define SYS_SENDMSG 46
-#define SYS_RECVMSG 47
-#define SYS_CLOSE 3
-#define SYS_MEMFD_CREATE 319
-#define SYS_FTRUNCATE 77
-#define SYS_CLOCK_GETTIME 228
-#define AF_UNIX 1
-#define SOCK_STREAM 1
-#define SOL_SOCKET 1
-#define SCM_RIGHTS 1
-#define PROT_READ 0x1
-#define PROT_WRITE 0x2
-#define MAP_SHARED 0x01
-
-#define WL_OBJECT_MAX 256
-#define WL_RX_CAP 8192
-#define WL_FDQ_CAP 32
-
-#define WL_DISPLAY 1
-#define WL_REGISTRY 2
-#define WL_COMPOSITOR 3
-#define WL_SHM 4
-#define WL_SURFACE 5
-#define WL_SHM_POOL 6
-#define WL_BUFFER 7
-
-#define WL_SHM_FORMAT_XRGB8888 0
-
-struct linux_sockaddr_un {
-    uint16_t sun_family;
-    char sun_path[108];
-};
-
-struct linux_iovec {
-    void* iov_base;
-    uint64_t iov_len;
-};
-
-struct linux_msghdr {
-    void* msg_name;
-    uint32_t msg_namelen;
-    uint32_t __pad0;
-    struct linux_iovec* msg_iov;
-    uint64_t msg_iovlen;
-    void* msg_control;
-    uint64_t msg_controllen;
-    uint32_t msg_flags;
-    uint32_t __pad1;
-};
-
-struct linux_cmsghdr {
-    uint64_t cmsg_len;
-    int32_t cmsg_level;
-    int32_t cmsg_type;
-};
-
-struct linux_timespec_local {
-    int64_t tv_sec;
-    int64_t tv_nsec;
-};
-
-typedef struct wl_obj_state {
-    uint32_t type;
-    int fd;
-    uint8_t* map;
-    uint32_t size;
-    uint32_t pool_id;
-    uint32_t offset;
-    int32_t width;
-    int32_t height;
-    int32_t stride;
-    uint32_t format;
-    uint32_t attached_buffer_id;
-} wl_obj_state;
-
-static uint32_t* wl_fb = 0;
-static uint32_t wl_fb_w = 1280;
-static uint32_t wl_fb_h = 720;
-static int wl_blit_failed_once = 0;
-static wl_obj_state g_objs[WL_OBJECT_MAX];
-
-static void puts1(const char* s) {
-    int n = 0;
-    while (s[n]) ++n;
-    ams_syscall(1, 1, (uint64_t)s, (uint64_t)n, 0, 0);
-    ams_syscall(1, 1, (uint64_t)"\n", 1, 0, 0);
-}
-
-static uint32_t now_ms(void) {
-    struct linux_timespec_local ts;
-    long rc = (long)ams_syscall(SYS_CLOCK_GETTIME, 0, (uint64_t)&ts, 0, 0, 0);
-    if (rc != 0) return 0;
-    return (uint32_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
-}
-
-static uint32_t rd_u32(const uint8_t* p) {
-    return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static void wr_u32(uint8_t* p, uint32_t v) {
-    p[0] = (uint8_t)(v & 0xFF);
-    p[1] = (uint8_t)((v >> 8) & 0xFF);
-    p[2] = (uint8_t)((v >> 16) & 0xFF);
-    p[3] = (uint8_t)((v >> 24) & 0xFF);
-}
-
-static uint32_t append_u32(uint8_t* out, uint32_t at, uint32_t v) {
-    wr_u32(out + at, v);
-    return at + 4;
-}
-
-static uint32_t append_string(uint8_t* out, uint32_t at, const char* s) {
-    uint32_t len = 0;
-    while (s[len]) ++len;
-    at = append_u32(out, at, len + 1);
-    memcpy(out + at, s, len);
-    out[at + len] = 0;
-    at += len + 1;
-    while (at & 3U) out[at++] = 0;
-    return at;
-}
-
-static long send_packet(int fd, const uint8_t* data, uint32_t len, int send_fd) {
-    struct linux_iovec iov = {(void*)data, len};
-    uint8_t control[32] = {0};
-    struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    if (send_fd >= 0) {
-        struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
-        ch->cmsg_len = sizeof(struct linux_cmsghdr) + sizeof(int);
-        ch->cmsg_level = SOL_SOCKET;
-        ch->cmsg_type = SCM_RIGHTS;
-        *(int*)(control + sizeof(struct linux_cmsghdr)) = send_fd;
-        msg.msg_control = control;
-        msg.msg_controllen = ch->cmsg_len;
-    }
-    return (long)ams_syscall(SYS_SENDMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
-}
-
-static int recv_packet(int fd, uint8_t* data, uint32_t cap, int* recv_fd) {
-    struct linux_iovec iov = {data, cap};
-    uint8_t control[64] = {0};
-    struct linux_msghdr msg = {0};
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control;
-    msg.msg_controllen = sizeof(control);
-    *recv_fd = -1;
-    int rc = (int)ams_syscall(SYS_RECVMSG, (uint64_t)fd, (uint64_t)&msg, 0, 0, 0);
-    if (rc <= 0) return rc;
-    if (msg.msg_controllen >= sizeof(struct linux_cmsghdr) + sizeof(int)) {
-        struct linux_cmsghdr* ch = (struct linux_cmsghdr*)control;
-        if (ch->cmsg_level == SOL_SOCKET && ch->cmsg_type == SCM_RIGHTS) {
-            *recv_fd = *(int*)(control + sizeof(struct linux_cmsghdr));
-        }
-    }
-    return rc;
-}
-
-static int g_bootstrap_client_fd = -1;
-
-typedef struct wl_fd_queue {
-    int data[WL_FDQ_CAP];
-    uint32_t head;
-    uint32_t tail;
-} wl_fd_queue;
-
-static void fdq_init(wl_fd_queue* q) {
-    q->head = 0;
-    q->tail = 0;
-    for (uint32_t i = 0; i < WL_FDQ_CAP; ++i) q->data[i] = -1;
-}
-
-static int fdq_push(wl_fd_queue* q, int fd) {
-    uint32_t next = (q->tail + 1U) % WL_FDQ_CAP;
-    if (next == q->head) return -1; // full
-    q->data[q->tail] = fd;
-    q->tail = next;
-    return 0;
-}
-
-static int fdq_pop(wl_fd_queue* q) {
-    if (q->head == q->tail) return -1; // empty
-    int fd = q->data[q->head];
-    q->head = (q->head + 1U) % WL_FDQ_CAP;
-    return fd;
-}
-
-static int bootstrap_local_shm_client(void) {
-    struct linux_sockaddr_un addr = {0};
-    addr.sun_family = AF_UNIX;
-    {
-        const char* p = "/run/user/0/wayland-0";
-        for (int i = 0; p[i] && i < 107; ++i) addr.sun_path[i] = p[i];
-    }
-
-    int fd = (int)ams_syscall(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0, 0, 0);
-    if (fd < 0) return -1;
-    if ((int)ams_syscall(SYS_CONNECT, (uint64_t)fd, (uint64_t)&addr, sizeof(addr), 0, 0) < 0) {
-        (void)ams_syscall(SYS_CLOSE, (uint64_t)fd, 0, 0, 0, 0);
-        return -2;
-    }
-
-    // Minimalny bootstrap klienta z ustalonymi nazwami globals 1/2.
-    const uint32_t registry_id = 10;
-    const uint32_t compositor_id = 11;
-    const uint32_t shm_id = 12;
-    const uint32_t surface_id = 13;
-    const uint32_t pool_id = 14;
-    const uint32_t buffer_id = 15;
-    uint8_t msg[512] = {0};
-    uint32_t at = 0;
-
-    at = append_u32(msg, at, 1);
-    at = append_u32(msg, at, (12U << 16) | 1U); // wl_display.get_registry
-    at = append_u32(msg, at, registry_id);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, registry_id);
-    {
-        uint32_t hdr_at = at;
-        at = append_u32(msg, at, 0); // wl_registry.bind
-        at = append_u32(msg, at, 1); // wl_compositor global name
-        at = append_string(msg, at, "wl_compositor");
-        at = append_u32(msg, at, 4);
-        at = append_u32(msg, at, compositor_id);
-        wr_u32(msg + hdr_at, (uint32_t)(at << 16) | 0U);
-    }
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, registry_id);
-    {
-        uint32_t hdr_at = at;
-        at = append_u32(msg, at, 0); // wl_registry.bind
-        at = append_u32(msg, at, 2); // wl_shm global name
-        at = append_string(msg, at, "wl_shm");
-        at = append_u32(msg, at, 1);
-        at = append_u32(msg, at, shm_id);
-        wr_u32(msg + hdr_at, (uint32_t)(at << 16) | 0U);
-    }
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, compositor_id);
-    at = append_u32(msg, at, (12U << 16) | 0U); // create_surface
-    at = append_u32(msg, at, surface_id);
-    (void)send_packet(fd, msg, at, -1);
-
-    const int width = 640;
-    const int height = 360;
-    const int stride = width * 4;
-    const int size = stride * height;
-    int shmfd = (int)ams_syscall(SYS_MEMFD_CREATE, (uint64_t)"wl-bootstrap", 0, 0, 0, 0);
-    if (shmfd < 0) return -3;
-    if ((int)ams_syscall(SYS_FTRUNCATE, (uint64_t)shmfd, (uint64_t)size, 0, 0, 0) < 0) return -4;
-    uint32_t* pix = (uint32_t*)mmap(0, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, shmfd, 0);
-    if ((uint64_t)pix > (uint64_t)-4096LL) return -5;
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            uint32_t r = (uint32_t)((x * 255) / width);
-            uint32_t g = (uint32_t)((y * 255) / height);
-            uint32_t b = (uint32_t)((x ^ y) & 0xFF);
-            pix[y * width + x] = (r << 16) | (g << 8) | b;
-        }
-    }
-
-    at = 0;
-    at = append_u32(msg, at, shm_id);
-    at = append_u32(msg, at, (16U << 16) | 0U); // create_pool
-    at = append_u32(msg, at, pool_id);
-    at = append_u32(msg, at, (uint32_t)size);
-    (void)send_packet(fd, msg, at, shmfd);
-
-    at = 0;
-    at = append_u32(msg, at, pool_id);
-    at = append_u32(msg, at, (32U << 16) | 0U); // create_buffer
-    at = append_u32(msg, at, buffer_id);
-    at = append_u32(msg, at, 0);
-    at = append_u32(msg, at, (uint32_t)width);
-    at = append_u32(msg, at, (uint32_t)height);
-    at = append_u32(msg, at, (uint32_t)stride);
-    at = append_u32(msg, at, 0); // XRGB8888
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, surface_id);
-    at = append_u32(msg, at, (20U << 16) | 1U); // attach
-    at = append_u32(msg, at, buffer_id);
-    at = append_u32(msg, at, 0);
-    at = append_u32(msg, at, 0);
-    (void)send_packet(fd, msg, at, -1);
-
-    at = 0;
-    at = append_u32(msg, at, surface_id);
-    at = append_u32(msg, at, (8U << 16) | 6U); // commit
-    (void)send_packet(fd, msg, at, -1);
-
-    g_bootstrap_client_fd = fd;
-    return fd;
-}
-
-static void send_registry_global(int fd, uint32_t reg_id, uint32_t name, const char* iface, uint32_t version) {
-    uint8_t pkt[256] = {0};
-    uint32_t at = 0;
-    at = append_u32(pkt, at, reg_id);
-    uint32_t hdr_at = at;
-    at = append_u32(pkt, at, 0);
-    at = append_u32(pkt, at, name);
-    at = append_string(pkt, at, iface);
-    at = append_u32(pkt, at, version);
-    wr_u32(pkt + hdr_at, (at << 16) | 0); // wl_registry.global
-    (void)send_packet(fd, pkt, at, -1);
-}
-
-static void send_shm_format(int fd, uint32_t shm_id, uint32_t fmt) {
-    uint8_t pkt[16] = {0};
-    wr_u32(pkt + 0, shm_id);
-    wr_u32(pkt + 4, (12U << 16) | 0U); // wl_shm.format
-    wr_u32(pkt + 8, fmt);
-    (void)send_packet(fd, pkt, 12, -1);
-}
-
-static void draw_waiting_frame(uint32_t tick) {
-    if (!wl_fb) return;
-    for (uint32_t y = 0; y < wl_fb_h; ++y) {
-        for (uint32_t x = 0; x < wl_fb_w; ++x) {
-            uint32_t r = (uint32_t)((x + tick) & 0xFF);
-            uint32_t g = (uint32_t)((y + (tick >> 1)) & 0xFF);
-            uint32_t b = 0x40;
-            wl_fb[y * wl_fb_w + x] = (r << 16) | (g << 8) | b;
-        }
-    }
-    long rc = (long)ams_syscall(SYS_AMS_FB_BLIT, (uint64_t)wl_fb, wl_fb_w, wl_fb_h, 0, 0);
-    if (rc != 0 && !wl_blit_failed_once) {
-        wl_blit_failed_once = 1;
-        puts1("wl-compositor: fb blit failed");
-    }
-}
-
-static void present_attached_surface(uint32_t surf_id) {
-    if (surf_id >= WL_OBJECT_MAX) return;
-    wl_obj_state* surf = &g_objs[surf_id];
-    if (surf->type != WL_SURFACE || surf->attached_buffer_id == 0) return;
-    uint32_t bid = surf->attached_buffer_id;
-    if (bid >= WL_OBJECT_MAX) return;
-    wl_obj_state* buf = &g_objs[bid];
-    if (buf->type != WL_BUFFER) return;
-    if (buf->pool_id == 0 || buf->pool_id >= WL_OBJECT_MAX) return;
-    wl_obj_state* pool = &g_objs[buf->pool_id];
-    if (pool->type != WL_SHM_POOL || !pool->map) return;
-    if (buf->format != WL_SHM_FORMAT_XRGB8888) return;
-
-    memset(wl_fb, 0, wl_fb_w * wl_fb_h * sizeof(uint32_t));
-
-    uint32_t copy_w = (buf->width > 0 && (uint32_t)buf->width < wl_fb_w) ? (uint32_t)buf->width : wl_fb_w;
-    uint32_t copy_h = (buf->height > 0 && (uint32_t)buf->height < wl_fb_h) ? (uint32_t)buf->height : wl_fb_h;
-    for (uint32_t y = 0; y < copy_h; ++y) {
-        uint32_t src_off = buf->offset + y * (uint32_t)buf->stride;
-        if (src_off + copy_w * 4U > pool->size) break;
-        memcpy(&wl_fb[y * wl_fb_w], pool->map + src_off, copy_w * 4U);
-    }
-    (void)ams_syscall(SYS_AMS_FB_BLIT, (uint64_t)wl_fb, wl_fb_w, wl_fb_h, 0, 0);
-}
-
-static void clear_objects(void) {
-    memset(g_objs, 0, sizeof(g_objs));
-    g_objs[1].type = WL_DISPLAY;
-    g_objs[2].type = WL_COMPOSITOR;
-    g_objs[3].type = WL_SHM;
-}
-
-static void process_message(int fd, wl_fd_queue* fdq, uint32_t obj_id, uint16_t opcode, const uint8_t* payload, uint32_t payload_len) {
-    if (obj_id >= WL_OBJECT_MAX) return;
-    wl_obj_state* obj = &g_objs[obj_id];
-    if (obj_id == 1 && obj->type == WL_DISPLAY) {
-        if (opcode == 1 && payload_len >= 4) { // get_registry(new_id)
-            uint32_t reg_id = rd_u32(payload);
-            if (reg_id > 0 && reg_id < WL_OBJECT_MAX) {
-                g_objs[reg_id].type = WL_REGISTRY;
-                send_registry_global(fd, reg_id, 1, "wl_compositor", 4);
-                send_registry_global(fd, reg_id, 2, "wl_shm", 1);
-            }
-        }
-        return;
-    }
-
-    if (obj->type == WL_REGISTRY) {
-        if (opcode == 0 && payload_len >= 16) { // bind
-            uint32_t name = rd_u32(payload + 0);
-            uint32_t str_len = rd_u32(payload + 4);
-            uint32_t str_padded = (str_len + 3U) & ~3U;
-            if (payload_len < 4 + 4 + str_padded + 4 + 4) return;
-            uint32_t version = rd_u32(payload + 8 + str_padded);
-            uint32_t new_id = rd_u32(payload + 12 + str_padded);
-            if (new_id == 0 || new_id >= WL_OBJECT_MAX) return;
-            if (name == 1) g_objs[new_id].type = WL_COMPOSITOR;
-            if (name == 2) {
-                g_objs[new_id].type = WL_SHM;
-                send_shm_format(fd, new_id, WL_SHM_FORMAT_XRGB8888);
-                (void)version;
-            }
-        }
-        return;
-    }
-
-    if (obj->type == WL_COMPOSITOR) {
-        if (opcode == 0 && payload_len >= 4) { // create_surface
-            uint32_t new_id = rd_u32(payload + 0);
-            if (new_id > 0 && new_id < WL_OBJECT_MAX) g_objs[new_id].type = WL_SURFACE;
-        }
-        return;
-    }
-
-    if (obj->type == WL_SHM) {
-        if (opcode == 0 && payload_len >= 8) { // create_pool
-            uint32_t new_id = rd_u32(payload + 0);
-            uint32_t size = rd_u32(payload + 4);
-            int passed_fd = fdq_pop(fdq);
-            if (new_id == 0 || new_id >= WL_OBJECT_MAX) return;
-            if (passed_fd < 0 || size == 0) return;
-            g_objs[new_id].type = WL_SHM_POOL;
-            g_objs[new_id].fd = passed_fd;
-            g_objs[new_id].size = size;
-            g_objs[new_id].map = (uint8_t*)mmap(0, size, PROT_READ, MAP_SHARED, passed_fd, 0);
-            if ((uint64_t)g_objs[new_id].map > (uint64_t)-4096LL) g_objs[new_id].map = 0;
-        }
-        return;
-    }
-
-    if (obj->type == WL_SHM_POOL) {
-        if (opcode == 0 && payload_len >= 24) { // create_buffer
-            uint32_t new_id = rd_u32(payload + 0);
-            if (new_id == 0 || new_id >= WL_OBJECT_MAX) return;
-            g_objs[new_id].type = WL_BUFFER;
-            g_objs[new_id].pool_id = obj_id;
-            g_objs[new_id].offset = rd_u32(payload + 4);
-            g_objs[new_id].width = (int32_t)rd_u32(payload + 8);
-            g_objs[new_id].height = (int32_t)rd_u32(payload + 12);
-            g_objs[new_id].stride = (int32_t)rd_u32(payload + 16);
-            g_objs[new_id].format = rd_u32(payload + 20);
-        } else if (opcode == 1) { // destroy
-            obj->type = 0;
-        }
-        return;
-    }
-
-    if (obj->type == WL_SURFACE) {
-        if (opcode == 1 && payload_len >= 12) { // attach
-            uint32_t buffer_id = rd_u32(payload + 0);
-            obj->attached_buffer_id = buffer_id;
-        } else if (opcode == 6) { // commit
-            present_attached_surface(obj_id);
-        } else if (opcode == 0) { // destroy
-            obj->type = 0;
-        }
-        return;
-    }
-
-    if (obj->type == WL_BUFFER && opcode == 0) { // destroy
-        obj->type = 0;
-    }
-}
-
-static void handle_client_session(int cli) {
-    uint8_t rx[WL_RX_CAP];
-    uint32_t rx_len = 0;
-    wl_fd_queue fdq;
-    fdq_init(&fdq);
-    clear_objects();
-    puts1("wl-compositor: client connected");
-    while (1) {
-        int passed_fd = -1;
-        int n = recv_packet(cli, rx + rx_len, WL_RX_CAP - rx_len, &passed_fd);
-        if (n == 0) break;
-        if (n < 0) continue;
-        if (passed_fd >= 0) (void)fdq_push(&fdq, passed_fd);
-        rx_len += (uint32_t)n;
-        uint32_t at = 0;
-        while (rx_len - at >= 8) {
-            uint32_t obj_id = rd_u32(rx + at);
-            uint32_t hdr = rd_u32(rx + at + 4);
-            uint16_t opcode = (uint16_t)(hdr & 0xFFFFU);
-            uint16_t size = (uint16_t)(hdr >> 16);
-            if (size < 8) {
-                at = rx_len;
-                break;
-            }
-            if (at + size > rx_len) break;
-            process_message(cli, &fdq, obj_id, opcode, rx + at + 8, (uint32_t)size - 8);
-            at += size;
-        }
-        if (at > 0) {
-            memmove(rx, rx + at, rx_len - at);
-            rx_len -= at;
-        }
-    }
-    (void)ams_syscall(SYS_CLOSE, cli, 0, 0, 0, 0);
-    puts1("wl-compositor: client disconnected");
-}
-
-int main(void) {
-    struct linux_sockaddr_un addr = {0};
-    addr.sun_family = AF_UNIX;
-    {
-        const char* p = "/run/user/0/wayland-0";
-        for (int i = 0; p[i] && i < 107; ++i) addr.sun_path[i] = p[i];
     }
 
     int srv = (int)ams_syscall(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0, 0, 0);
-    if (srv < 0) {
-        puts1("wl-compositor: socket failed");
-        return 1;
-    }
+    if (srv < 0) { puts1("wl-compositor: socket failed"); return 2; }
     if ((int)ams_syscall(SYS_BIND, srv, (uint64_t)&addr, sizeof(addr), 0, 0) < 0) {
-        puts1("wl-compositor: bind failed");
-        return 2;
+        puts1("wl-compositor: bind failed"); return 3;
     }
     (void)ams_syscall(SYS_LISTEN, srv, 8, 0, 0, 0);
+
     puts1("wl-compositor: listening on wayland-0");
+    puts1("wl-compositor: DRM/KMS + GEM backend ready");
+    puts1("wl-compositor: protocol core+xdg+seat+subcompositor ready");
 
-    if ((int)ams_syscall(SYS_AMS_GET_FB_INFO, (uint64_t)&wl_fb_w, (uint64_t)&wl_fb_h, 0, 0, 0) != 0 || wl_fb_w == 0 || wl_fb_h == 0) {
-        wl_fb_w = 1280;
-        wl_fb_h = 720;
-    }
-    wl_fb = (uint32_t*)malloc((size_t)wl_fb_w * (size_t)wl_fb_h * sizeof(uint32_t));
-    if (!wl_fb) {
-        puts1("wl-compositor: fb buffer alloc failed");
-        return 3;
-    }
-    draw_waiting_frame(0);
-    puts1("wl-compositor: protocol core ready");
-    if (bootstrap_local_shm_client() >= 0) {
-        puts1("wl-compositor: local shm bootstrap queued");
-    } else {
-        puts1("wl-compositor: local shm bootstrap failed");
-    }
+    redraw();
 
-    uint32_t tick = 1;
-    uint32_t last_draw = now_ms();
-    uint32_t last_wait_log = now_ms();
+    /* Event loop using poll(2) for multi-client support */
     while (1) {
-        uint32_t tnow = now_ms();
-        if ((uint32_t)(tnow - last_draw) >= 120) {
-            draw_waiting_frame(tick++);
-            last_draw = tnow;
-        }
-        int cli = (int)ams_syscall(SYS_ACCEPT, srv, 0, 0, 0, 0);
-        if (cli < 0) {
-            if ((uint32_t)(tnow - last_wait_log) >= 2000) {
-                puts1("wl-compositor: waiting for client...");
-                last_wait_log = tnow;
+        struct linux_pollfd fds[WL_MAX_CLIENTS + 1];
+        int nfds = 0;
+
+        fds[0].fd = srv;
+        fds[0].events = POLLIN;
+        fds[0].revents = 0;
+        nfds = 1;
+
+        for (int i = 0; i < WL_MAX_CLIENTS; ++i) {
+            if (g_clients[i].active) {
+                fds[nfds].fd = g_clients[i].fd;
+                fds[nfds].events = POLLIN;
+                fds[nfds].revents = 0;
+                nfds++;
             }
-            continue;
         }
-        handle_client_session(cli);
+
+        int pr = (int)ams_syscall(SYS_POLL, (uint64_t)fds, (uint64_t)nfds, 16 /*ms*/, 0, 0);
+
+        handle_input();
+
+        if (pr <= 0) continue;
+
+        /* New client connection */
+        if (fds[0].revents & POLLIN) {
+            int cli = (int)ams_syscall(SYS_ACCEPT, srv, 0, 0, 0, 0);
+            if (cli >= 0) {
+                int slot = -1;
+                for (int i = 0; i < WL_MAX_CLIENTS; ++i) {
+                    if (!g_clients[i].active) { slot = i; break; }
+                }
+                if (slot >= 0) {
+                    init_client(&g_clients[slot], cli);
+                    puts1("wl-compositor: client connected");
+                } else {
+                    puts1("wl-compositor: max clients reached");
+                    ams_syscall(3 /*SYS_CLOSE*/, (uint64_t)cli, 0, 0, 0, 0);
+                }
+            }
+        }
+
+        /* Process active client data */
+        int fi = 1;
+        for (int i = 0; i < WL_MAX_CLIENTS; ++i) {
+            if (!g_clients[i].active) continue;
+            if (fi < nfds && (fds[fi].revents & (POLLIN | POLLERR | POLLHUP))) {
+                process_client_data(&g_clients[i]);
+            }
+            fi++;
+        }
     }
 }

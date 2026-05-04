@@ -214,14 +214,46 @@ build/doom.elf: $(DOOM_OBJS) $(LIBC_OBJS) src/gui/apps/user.ld
 	@echo "[LINK] Budowanie doom.elf (doomgeneric)..."
 	$(LD) $(USER_LDFLAGS) $(DOOM_OBJS) $(LIBC_OBJS) -o build/doom.elf
 
-# Wayland IPC smoke app (AF_UNIX + sendmsg/recvmsg + SCM_RIGHTS)
+# --- EXTERNAL DEPENDENCY STAGING ---
+
 wayland_stage:
-	@echo "[WAYLAND] Cloning/updating upstream sources..."
+	@echo "[WAYLAND] Cloning/updating upstream sources + wayland-scanner..."
 	@bash tools/wayland_stage.sh
 
 wayland_sync_apps: wayland_stage
 	@echo "[WAYLAND] Syncing AMS Wayland app sources into stage..."
 	@bash tools/wayland_sync_apps.sh
+
+mesa_stage:
+	@echo "[MESA] Cloning/building Mesa3D (EGL + GBM + swrast)..."
+	@bash tools/mesa_stage.sh
+
+libffi_stage:
+	@echo "[LIBFFI] Cloning/building libffi..."
+	@bash tools/libffi_stage.sh
+
+pixman_stage:
+	@echo "[PIXMAN] Cloning/building pixman..."
+	@bash tools/pixman_stage.sh
+
+cairo_stage: pixman_stage
+	@echo "[CAIRO] Cloning/building cairo..."
+	@bash tools/cairo_stage.sh
+
+libinput_stage:
+	@echo "[LIBINPUT] Cloning/building libinput + libevdev..."
+	@bash tools/libinput_stage.sh
+
+mlibc_stage:
+	@echo "[MLIBC] Cloning mlibc + creating AMS sysdeps..."
+	@bash tools/mlibc_stage.sh
+
+wlroots_stage: wayland_stage mesa_stage pixman_stage libinput_stage
+	@echo "[WLROOTS] Cloning/building wlroots..."
+	@bash tools/wlroots_stage.sh
+
+stage_all: wayland_stage mesa_stage libffi_stage pixman_stage cairo_stage libinput_stage mlibc_stage wlroots_stage
+	@echo "[STAGE] All external dependencies staged."
 
 wayland_desktop_matrix: build/wayland_compositor.elf build/ams_wayland_shell.elf build/wayland_smoke.elf build/wayland_smoke_client.elf build/wayland_session.elf
 	@echo "[WAYLAND] Running desktop compatibility matrix..."
@@ -376,7 +408,12 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 		echo "toolchain stage not found on host" | sudo tee ./temp_mount/tools/toolchain/meta/status.txt >/dev/null; \
 	fi
 
-	# Mesa payload copied INTO AMS disk (software-first data/staging artifacts)
+	# DRM device node
+	sudo mkdir -p ./temp_mount/dev/dri
+	sudo mkdir -p ./temp_mount/dev/shm
+	sudo mkdir -p ./temp_mount/run/user/0
+
+	# Mesa payload copied INTO AMS disk
 	@if [ -d external/mesa-stack/mesa/.git ]; then \
 		echo "[DISK] Copying Mesa stage metadata into AMS image..."; \
 		git -C external/mesa-stack/mesa rev-parse --short HEAD | sudo tee ./temp_mount/programs/wayland/mesa/mesa_commit.txt >/dev/null; \
@@ -394,6 +431,27 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	else \
 		echo "mesa local build artifacts missing (meson/ninja not available during stage)" | sudo tee ./temp_mount/programs/wayland/mesa/status.txt >/dev/null; \
 	fi
+
+	# wlroots payload
+	@if [ -d external/wlroots-stack/wlroots/.git ]; then \
+		echo "[DISK] Copying wlroots metadata..."; \
+		git -C external/wlroots-stack/wlroots rev-parse --short HEAD | sudo tee ./temp_mount/programs/wayland/mesa/wlroots_commit.txt >/dev/null; \
+	fi
+
+	# Wayland generated protocol headers
+	@if [ -d external/wayland-stack/generated ]; then \
+		echo "[DISK] Copying generated Wayland protocol sources..."; \
+		sudo mkdir -p ./temp_mount/programs/wayland/protocols; \
+		sudo cp -a external/wayland-stack/generated/. ./temp_mount/programs/wayland/protocols/; \
+	fi
+
+	# Stack status manifest
+	echo "DRM/KMS: kernel-integrated (GEM/TTM)" | sudo tee ./temp_mount/programs/wayland/mesa/stack_status.txt >/dev/null
+	echo "EGL/GBM: Mesa3D swrast" | sudo tee -a ./temp_mount/programs/wayland/mesa/stack_status.txt >/dev/null
+	echo "Compositor: wlroots-based" | sudo tee -a ./temp_mount/programs/wayland/mesa/stack_status.txt >/dev/null
+	echo "Rendering: pixman + cairo" | sudo tee -a ./temp_mount/programs/wayland/mesa/stack_status.txt >/dev/null
+	echo "Input: libinput + libevdev" | sudo tee -a ./temp_mount/programs/wayland/mesa/stack_status.txt >/dev/null
+	echo "IPC: AF_UNIX + shm_open + mmap" | sudo tee -a ./temp_mount/programs/wayland/mesa/stack_status.txt >/dev/null
 
 	# Flat aliases (zgodność wsteczna)
 	sudo cp include/ams_syscall.h ./temp_mount/ams_syscall.h

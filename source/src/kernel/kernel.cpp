@@ -649,6 +649,16 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     }
 
     graphics_init_double_buffer();
+
+    /* Initialize DRM/KMS subsystem with framebuffer info */
+    {
+        extern void drm_init(uint64_t fb_addr, uint32_t width, uint32_t height,
+                             uint32_t pitch, uint8_t bpp);
+        extern Framebuffer fb;
+        drm_init(fb.address, fb.width, fb.height, fb.pitch, fb.bpp);
+        write_serial_string("[BOOT] DRM/KMS subsystem initialized (GEM/TTM ready).\n");
+    }
+
     main_desktop = new Desktop();
     main_desktop->Init();
     main_desktop->AddWindow(new TerminalWindow(100, 100));

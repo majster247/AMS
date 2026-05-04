@@ -168,6 +168,8 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t FD_KIND_DRM = 8;
+static constexpr uint8_t FD_KIND_SHM = 9;
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -576,6 +578,17 @@ uint64_t sys_open(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_dev_drm = (strcmp(path_buf, "/dev/dri/card0") == 0 ||
+                           strcmp(path_buf, "dev/dri/card0") == 0);
+    bool pseudo_dev_shm = false;
+    {
+        const char* shm_prefix = "/dev/shm/";
+        int si = 0;
+        while (shm_prefix[si] && path_buf[si] == shm_prefix[si]) ++si;
+        if (shm_prefix[si] == '\0' && path_buf[si] != '\0')
+            pseudo_dev_shm = true;
+    }
+
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -583,7 +596,7 @@ uint64_t sys_open(registers* regs) {
         node = vfs_find(path_buf);
     }
     
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_dev_drm || pseudo_dev_shm) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         // Normalizacja nazwy do "flat VFS basename":
@@ -615,11 +628,27 @@ uint64_t sys_open(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_dev_drm)
+        fd_kind[fd] = FD_KIND_DRM;
+    else if (pseudo_dev_shm)
+        fd_kind[fd] = FD_KIND_SHM;
+    else if (pseudo_dev_null)
+        fd_kind[fd] = FD_KIND_DEV_NULL;
+    else if (pseudo_dev_urandom)
+        fd_kind[fd] = FD_KIND_DEV_URANDOM;
+    else
+        fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
     fd_pos[fd] = 0;
+
+    if (pseudo_dev_drm) {
+        write_serial_string("[SYSCALL] Opened DRM device fd=");
+        write_serial_dec(fd);
+        write_serial_string("\n");
+    }
+
     return fd;
 }
 
@@ -795,10 +824,29 @@ uint64_t sys_readlink(registers* regs) {
 
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
+    uint64_t request = regs->rsi;
+    uint64_t argp = regs->rdx;
     if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
+
+    /* Route DRM ioctls to DRM subsystem */
+    if (fd_kind[fd] == FD_KIND_DRM) {
+        extern int64_t drm_ioctl(int fd, uint64_t request, uint64_t arg);
+        return (uint64_t)drm_ioctl(fd, request, argp);
+    }
+
+    /* TIOCGWINSZ for terminal size queries */
+    if (request == 0x5413) {
+        if (argp && is_probably_user_ptr((void*)argp)) {
+            uint16_t* ws = (uint16_t*)argp;
+            ws[0] = 25;  /* rows */
+            ws[1] = 80;  /* cols */
+            ws[2] = 0;   /* xpixel */
+            ws[3] = 0;   /* ypixel */
+            return 0;
+        }
+    }
+
     return (uint64_t)-25; // ENOTTY
 }
 
@@ -1806,6 +1854,63 @@ static uint64_t sys_ams_get_fb_info(registers* regs) {
     return 0;
 }
 
+/* POSIX shm_open - creates or opens shared memory backed by memfd */
+static uint64_t sys_shm_open(registers* regs) {
+    const char* name = (const char*)regs->rdi;
+    int oflag = (int)regs->rsi;
+    (void)regs->rdx; // mode
+
+    if (!name || !is_probably_user_ptr(name)) return (uint64_t)-14;
+
+    char path_buf[128] = "/dev/shm/";
+    int pi = 9;
+    const char* n = name;
+    if (*n == '/') n++;
+    for (int i = 0; n[i] && pi < 126; ++i)
+        path_buf[pi++] = n[i];
+    path_buf[pi] = '\0';
+
+    /* Use memfd_create as backend */
+    int fd = get_free_fd();
+    if (fd < 0) return (uint64_t)-24;
+
+    vfs_node* node = vfs_find(path_buf);
+    if (!node && (oflag & 0x40)) { /* O_CREAT */
+        node = (vfs_node*)kmalloc(sizeof(vfs_node));
+        k_memset(node, 0, sizeof(vfs_node));
+        const char* base = path_buf;
+        while (*base == '/') base++;
+        k_strcpy(node->name, base);
+        node->type = FS_FILE;
+        node->source = FS_TAR;
+        node->next = vfs_root;
+        vfs_root = node;
+    }
+    if (!node) return (uint64_t)-2;
+
+    open_files[fd] = node;
+    fd_kind[fd] = FD_KIND_SHM;
+    fd_flags[fd] = 0;
+    fd_status[fd] = (uint32_t)oflag;
+    fd_aux[fd] = nullptr;
+    fd_pos[fd] = 0;
+
+    write_serial_string("[SHM] shm_open: ");
+    write_serial_string(path_buf);
+    write_serial_string(" fd=");
+    write_serial_dec(fd);
+    write_serial_string("\n");
+
+    return (uint64_t)fd;
+}
+
+static uint64_t sys_shm_unlink(registers* regs) {
+    const char* name = (const char*)regs->rdi;
+    if (!name || !is_probably_user_ptr(name)) return (uint64_t)-14;
+    /* Stub: just return success for now */
+    return 0;
+}
+
 //sys_exec jest zdefiniowany w fs/elf.cpp, ale deklarujemy go tutaj, żeby móc go przypisać do syscall_table
 extern "C" int sys_exec(const char* path, int argc, char** argv);
 
@@ -1937,6 +2042,14 @@ void init_syscall_table() {
         syscall_table[SYS_AMS_GET_KEY] = sys_ams_get_key;
         syscall_table[SYS_AMS_GET_FB_INFO] = sys_ams_get_fb_info;
         syscall_table[453] = sys_ams_get_mouse_event;
+        syscall_table[SYS_SHM_OPEN] = sys_shm_open;
+        syscall_table[SYS_SHM_UNLINK] = sys_shm_unlink;
+
+        /* mkdir stub */
+        syscall_table[SYS_MKDIR] = [](registers* r) -> uint64_t {
+            (void)r;
+            return 0;
+        };
 }
 
 // --- GŁÓWNY HANDLER ---

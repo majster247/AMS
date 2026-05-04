@@ -75,6 +75,7 @@
         syscall_table[SYS_GETEGID] = [](registers* r) -> uint64_t { return 0; };
 
 */
+#define SYS_MKDIR        83
 #define SYS_EXECVE       59
 #define SYS_FORK         57
 #define SYS_SET_TID_ADDRESS 100
@@ -96,3 +97,8 @@
 #define SYS_EPOLL_CREATE1 291
 #define SYS_STATX        332
 #define SYS_AMS_GET_MOUSE_EVENT 453
+#define SYS_SHM_OPEN    454
+#define SYS_SHM_UNLINK  455
+
+/* DRM-related */
+#define SYS_DRM_IOCTL   456
