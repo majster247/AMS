@@ -96,3 +96,10 @@
 #define SYS_EPOLL_CREATE1 291
 #define SYS_STATX        332
 #define SYS_AMS_GET_MOUSE_EVENT 453
+
+/* AMS-OS custom syscalls for DRM/KMS/GEM and POSIX shm */
+#define SYS_AMS_DRM_OPEN     460   /* open /dev/dri/card0, returns drm fd   */
+#define SYS_AMS_DRM_IOCTL    461   /* drm_ioctl(fd, request, arg)           */
+#define SYS_AMS_SHM_OPEN     462   /* shm_open(name, oflag, mode)           */
+#define SYS_AMS_SHM_UNLINK   463   /* shm_unlink(name)                      */
+#define SYS_AMS_GBM_ALLOC    464   /* gbm_bo_create stub                    */

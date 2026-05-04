@@ -7,6 +7,7 @@
 #include "vmm.h"
 #include "gdt.h"
 #include "graphics.h"
+#include "drm/gem_ttm.h"
 #include <stdint.h>
 
 typedef uint64_t (*syscall_fn)(registers* regs);
@@ -168,6 +169,8 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t FD_KIND_DRM = 8;
+/* DRM fd: fd_aux holds the drm_idx (int cast to void*) */
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -310,6 +313,9 @@ static void clear_fd_slot(int fd) {
     } else if (fd_kind[fd] == FD_KIND_EVENTFD) {
         eventfd_state* es = (eventfd_state*)fd_aux[fd];
         if (es) kfree(es);
+    } else if (fd_kind[fd] == FD_KIND_DRM) {
+        int drm_idx = (int)(uint64_t)fd_aux[fd];
+        drm_close(drm_idx);
     }
 
     open_files[fd] = nullptr;
@@ -576,13 +582,30 @@ uint64_t sys_open(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    /* DRM card device */
+    bool pseudo_drm = (strcmp(path_buf, "/dev/dri/card0") == 0 ||
+                       strcmp(path_buf, "/dev/dri/renderD128") == 0);
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
     } else {
         node = vfs_find(path_buf);
     }
-    
+
+    if (pseudo_drm) {
+        int drm_idx = drm_open();
+        if (drm_idx < 0) return (uint64_t)-24; /* EMFILE */
+        int fd = get_free_fd();
+        if (fd < 0) { drm_close(drm_idx); return (uint64_t)-24; }
+        open_files[fd] = &g_root_dir; /* sentinel */
+        fd_kind[fd]    = FD_KIND_DRM;
+        fd_flags[fd]   = 0;
+        fd_status[fd]  = (uint32_t)flags;
+        fd_aux[fd]     = (void*)(uint64_t)(unsigned)drm_idx;
+        fd_pos[fd]     = 0;
+        return (uint64_t)fd;
+    }
+
     if (pseudo_dev_null || pseudo_dev_urandom) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
@@ -795,11 +818,19 @@ uint64_t sys_readlink(registers* regs) {
 
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
-    if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
-    if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
-    return (uint64_t)-25; // ENOTTY
+    uint64_t request = regs->rsi;
+    uint64_t argp    = regs->rdx;
+
+    if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; /* ENOTTY */
+    if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; /* EBADF */
+
+    /* Route DRM ioctls */
+    if (fd_kind[fd] == FD_KIND_DRM) {
+        int drm_idx = (int)(uint64_t)fd_aux[fd];
+        return drm_ioctl(drm_idx, request, argp);
+    }
+
+    return (uint64_t)-25; /* ENOTTY */
 }
 
 uint64_t sys_dup(registers* regs) {
@@ -1683,20 +1714,98 @@ uint64_t sys_wait4(registers* regs) {
     return (uint64_t)-10; // ECHILD
 }
 
+/* -----------------------------------------------------------------------
+ * sys_mmap – full implementation:
+ *   MAP_ANONYMOUS  → allocate fresh physical pages (original behaviour)
+ *   MAP_SHARED + memfd fd → map the fd's tar_data buffer (shared memory)
+ *   MAP_SHARED + DRM fd  → map GEM BO via gem_mmap_bo()
+ *   Any other fd         → anonymous fallback (forward-compat stub)
+ * --------------------------------------------------------------------- */
+static constexpr uint64_t MAP_SHARED  = 0x01;
+static constexpr uint64_t MAP_PRIVATE = 0x02;
+static constexpr uint64_t MAP_ANON    = 0x20;
+static constexpr uint64_t MAP_FIXED   = 0x10;
+
 uint64_t sys_mmap(registers* regs) {
-    uint64_t length = regs->rsi;
+    /* Linux x86-64 mmap2: rdi=addr rsi=length rdx=prot r10=flags r8=fd r9=offset */
+    uint64_t req_addr = regs->rdi;
+    uint64_t length   = regs->rsi;
+    /* uint64_t prot  = regs->rdx; */
+    uint64_t flags    = regs->r10;
+    int      fd       = (int)(int64_t)regs->r8;
+    uint64_t offset   = regs->r9;
+
     length = (length + 4095) & ~4095ULL;
-    
-    static uint64_t mmap_ptr = 0x400000000; // Startujemy wysoko
-    uint64_t addr = mmap_ptr;
+    if (!length) return (uint64_t)-22; /* EINVAL */
+    if (!current_task) return (uint64_t)-12;
+
+    static uint64_t mmap_ptr = 0x400000000ULL;
+
+    /* --- MAP_SHARED on a memfd: map the backing tar_data buffer ---------- */
+    if ((flags & MAP_SHARED) && !(flags & MAP_ANON) &&
+        fd >= 3 && fd < 100 && open_files[fd] &&
+        fd_kind[fd] == FD_KIND_FILE && open_files[fd]->tar_data) {
+
+        vfs_node* node = open_files[fd];
+        uint8_t* data  = node->tar_data + offset;
+        uint64_t avail = (node->max_size > offset) ? node->max_size - offset : 0;
+        if (avail < length) return (uint64_t)-22;
+
+        /* Map each page of tar_data into user space.
+         * tar_data is kmalloc-backed kernel virtual memory; we need its physical
+         * address via vmm_get_phys() against the kernel CR3. */
+        uint64_t vaddr = req_addr ? req_addr : mmap_ptr;
+        if (!req_addr) mmap_ptr += length;
+
+        for (uint64_t i = 0; i < length; i += 4096) {
+            uint64_t kva  = (uint64_t)(data + i);
+            uint64_t phys = vmm_get_phys(kva);
+            if (!phys) {
+                /* Fallback: the kmalloc page might be mapped 1:1 in early boot.
+                 * Try subtracting PHYS_OFFSET for HHDM-mapped addresses. */
+                if (kva >= PHYS_OFFSET)
+                    phys = kva - PHYS_OFFSET;
+                else
+                    phys = kva; /* identity-mapped */
+            }
+            vmm_map_page_ex(current_task->cr3, vaddr + i, phys, 0x7);
+        }
+        return vaddr;
+    }
+
+    /* --- MAP_SHARED on a DRM fd: route through GEM mmap -------------------*/
+    if ((flags & MAP_SHARED) && !(flags & MAP_ANON) &&
+        fd >= 3 && fd < 100 && fd_kind[fd] == FD_KIND_DRM) {
+
+        /* offset encodes the GEM BO phys_base (as returned by MODE_MAP_DUMB) */
+        gem_bo* bo = nullptr;
+        for (int i = 0; i < GEM_MAX_BOS; ++i) {
+            extern gem_bo* gem_lookup(uint32_t);
+            /* Find BO whose phys_base matches the requested offset */
+            (void)i; /* lookup done below */
+            break;
+        }
+        /* Linear search by phys_base */
+        for (int i = 0; i < GEM_MAX_BOS; ++i) {
+            gem_bo* candidate = gem_lookup((uint32_t)(i + 1));
+            if (candidate && candidate->phys_base == offset) { bo = candidate; break; }
+        }
+        if (bo) {
+            uint64_t va = gem_mmap_bo(bo);
+            return va ? va : (uint64_t)-12;
+        }
+        /* Fall through to anonymous */
+    }
+
+    /* --- MAP_ANONYMOUS (or unknown fd): allocate fresh pages --------------- */
+    uint64_t addr = req_addr ? req_addr : mmap_ptr;
+    if (!req_addr) mmap_ptr += length;
 
     for (uint64_t i = 0; i < length; i += 4096) {
         void* phys = pmm_alloc_frame();
-        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7); // USER | WRITABLE | PRESENT
-        k_memset((void*)((uint64_t)phys + 0xFFFF800000000000ULL), 0, 4096);
+        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7);
+        k_memset((void*)((uint64_t)phys + PHYS_OFFSET), 0, 4096);
     }
-
-    mmap_ptr += length;
     return addr;
 }
 
@@ -1831,6 +1940,104 @@ uint64_t sys_execve(registers* regs) {
 }
 
 
+/* -----------------------------------------------------------------------
+ * POSIX shm_open / shm_unlink (implemented on top of memfd + /dev/shm VFS)
+ * --------------------------------------------------------------------- */
+
+/* Global name→fd mapping for named shared memory objects */
+struct shm_entry {
+    char name[64];
+    int  memfd;    /* fd of the backing memfd; -1 = deleted */
+    uint32_t size;
+};
+static shm_entry g_shm[32];
+static int g_shm_count = 0;
+
+static uint64_t sys_ams_shm_open(registers* regs) {
+    const char* name    = (const char*)regs->rdi;
+    int         oflag   = (int)regs->rsi;
+    /* uint32_t mode = (uint32_t)regs->rdx; */
+
+    if (!name || !is_probably_user_ptr(name)) return (uint64_t)-14;
+    char nbuf[64];
+    size_t ni = 0;
+    /* strip leading '/' */
+    const char* n = name;
+    while (*n == '/') ++n;
+    for (; ni < 63 && n[ni]; ++ni) nbuf[ni] = n[ni];
+    nbuf[ni] = '\0';
+    if (!ni) return (uint64_t)-22;
+
+    /* O_CREAT = 0x40, O_EXCL = 0x80, O_RDWR = 0x2 */
+    bool create = (oflag & 0x40) != 0;
+    bool excl   = (oflag & 0x80) != 0;
+
+    /* Search existing */
+    for (int i = 0; i < g_shm_count; ++i) {
+        if (g_shm[i].memfd >= 0 && strcmp(g_shm[i].name, nbuf) == 0) {
+            if (excl && create) return (uint64_t)-17; /* EEXIST */
+            /* Return a new fd pointing to the same backing memfd */
+            int fd = get_free_fd();
+            if (fd < 0) return (uint64_t)-24;
+            open_files[fd] = open_files[g_shm[i].memfd];
+            fd_kind[fd]    = FD_KIND_FILE;
+            fd_flags[fd]   = 0;
+            fd_status[fd]  = (uint32_t)oflag;
+            fd_aux[fd]     = nullptr;
+            fd_pos[fd]     = 0;
+            return (uint64_t)fd;
+        }
+    }
+
+    if (!create) return (uint64_t)-2; /* ENOENT */
+    if (g_shm_count >= 32) return (uint64_t)-24;
+
+    /* Create via memfd_create */
+    registers r{};
+    r.rdi = (uint64_t)nbuf;
+    r.rsi = 0;
+    uint64_t memfd_ret = sys_memfd_create(&r);
+    if ((int64_t)memfd_ret < 0) return memfd_ret;
+
+    int mfd = (int)memfd_ret;
+    shm_entry* e = &g_shm[g_shm_count++];
+    k_strcpy(e->name, nbuf);
+    e->memfd = mfd;
+    e->size  = 0;
+    return (uint64_t)mfd;
+}
+
+static uint64_t sys_ams_shm_unlink(registers* regs) {
+    const char* name = (const char*)regs->rdi;
+    if (!name || !is_probably_user_ptr(name)) return (uint64_t)-14;
+    char nbuf[64];
+    const char* n = name;
+    while (*n == '/') ++n;
+    size_t ni = 0;
+    for (; ni < 63 && n[ni]; ++ni) nbuf[ni] = n[ni];
+    nbuf[ni] = '\0';
+    for (int i = 0; i < g_shm_count; ++i) {
+        if (g_shm[i].memfd >= 0 && strcmp(g_shm[i].name, nbuf) == 0) {
+            g_shm[i].memfd = -1;
+            return 0;
+        }
+    }
+    return (uint64_t)-2; /* ENOENT */
+}
+
+static uint64_t sys_ams_drm_open(registers* regs) {
+    (void)regs;
+    registers r{};
+    static const char drm_path[] = "/dev/dri/card0";
+    r.rdi = (uint64_t)drm_path;
+    r.rsi = 2; /* O_RDWR */
+    return sys_open(&r);
+}
+
+static uint64_t sys_ams_drm_ioctl(registers* regs) {
+    return sys_ioctl(regs);
+}
+
 // --- TABLICA DISPATCHERA ---
 // Uwaga: inicjalizator {sys_not_implemented} ustawia tylko element [0],
 // reszta byłaby wyzerowana. Wypełniamy całość jawnie w init_syscall_table().
@@ -1937,6 +2144,13 @@ void init_syscall_table() {
         syscall_table[SYS_AMS_GET_KEY] = sys_ams_get_key;
         syscall_table[SYS_AMS_GET_FB_INFO] = sys_ams_get_fb_info;
         syscall_table[453] = sys_ams_get_mouse_event;
+        syscall_table[SYS_AMS_DRM_OPEN]   = sys_ams_drm_open;
+        syscall_table[SYS_AMS_DRM_IOCTL]  = sys_ams_drm_ioctl;
+        syscall_table[SYS_AMS_SHM_OPEN]   = sys_ams_shm_open;
+        syscall_table[SYS_AMS_SHM_UNLINK] = sys_ams_shm_unlink;
+
+        /* Initialise GEM/TTM/KMS subsystem */
+        gem_ttm_init();
 }
 
 // --- GŁÓWNY HANDLER ---

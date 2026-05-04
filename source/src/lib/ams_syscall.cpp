@@ -52,19 +52,50 @@ int get_key() {
     return (int)ams_syscall(SYS_AMS_GET_KEY, 0, 0, 0, 0, 0);
 }
 
-// Mmap na razie symulujemy malloc'iem (dla user space to bez różnicy na tym etapie)
+/*
+ * mmap: full 6-argument syscall using inline assembly with explicit registers.
+ * Linux x86-64 syscall mmap: rax=9, rdi=addr, rsi=len, rdx=prot,
+ *                              r10=flags, r8=fd, r9=offset
+ */
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) {
-    // 9 = SYS_MMAP (zgodnie z Linuxem)
-    return (void*)ams_syscall(9, (uint64_t)addr, length, prot, flags, (uint64_t)fd);
+    void* result;
+    register uint64_t r10 __asm__("r10") = (uint64_t)(uint32_t)flags;
+    register uint64_t r8  __asm__("r8")  = (uint64_t)(uint32_t)fd;
+    register uint64_t r9  __asm__("r9")  = (uint64_t)offset;
+    __asm__ volatile (
+        "syscall"
+        : "=a"(result)
+        : "0"(9ULL),
+          "D"(addr),
+          "S"(length),
+          "d"((uint64_t)(uint32_t)prot),
+          "r"(r10), "r"(r8), "r"(r9)
+        : "rcx", "r11", "memory"
+    );
+    return result;
 }
 
 int munmap(void* addr, size_t length) {
+    (void)addr;
     (void)length;
-    free(addr);
-    return 0;
+    return (int)ams_syscall(11, (uint64_t)addr, (uint64_t)length, 0, 0, 0);
 }
 
-// Zmienne globalne dla errno (wymagane przez niektóre biblioteki C)
+/* --- POSIX shared memory --- */
+int shm_open(const char* name, int oflag, unsigned int mode) {
+    return (int)ams_syscall(462, (uint64_t)name, (uint64_t)oflag, (uint64_t)mode, 0, 0);
+}
+
+int shm_unlink(const char* name) {
+    return (int)ams_syscall(463, (uint64_t)name, 0, 0, 0, 0);
+}
+
+/* --- poll / ppoll wrappers --- */
+int poll(struct pollfd_ams* fds, unsigned long nfds, int timeout) {
+    return (int)ams_syscall(7, (uint64_t)fds, nfds, (uint64_t)timeout, 0, 0);
+}
+
+/* --- Zmienne globalne dla errno (wymagane przez niektóre biblioteki C) --- */
 int errno_val = 0;
 int* __errno_location() { return &errno_val; }
 
