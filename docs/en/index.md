@@ -45,8 +45,12 @@ This is the English version of the AMS-OS technical documentation.
 14. [Debugging and Tests](./06-debugging.md)
 15. [GitHub Pages and Publishing](./07-github-pages.md)
 
+### Desktop Graphics
+
+16. [Wayland desktop stack (mlibc + libffi + Mesa + wlroots)](./19-wayland-stack.md)
+
 ### Project Governance
 
-16. [Contributing](./17-contributing.md)
-17. [Release Notes](./18-release-notes.md)
-18. [Glossary](./12-glossary.md)
+17. [Contributing](./17-contributing.md)
+18. [Release Notes](./18-release-notes.md)
+19. [Glossary](./12-glossary.md)

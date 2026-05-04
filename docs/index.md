@@ -53,11 +53,15 @@ Ta dokumentacja opisuje system tak, jak dokumentuje się dojrzałe platformy: od
 14. [Debugowanie i testy](./06-debugowanie.md)
 15. [GitHub Pages i publikacja](./07-github-pages.md)
 
+### Desktop Graphics
+
+16. [Wayland desktop stack (mlibc + libffi + Mesa + wlroots)](./19-wayland-stack.md)
+
 ### Project Governance
 
-16. [Contributing](./17-contributing.md)
-17. [Release Notes](./18-release-notes.md)
-18. [Glosariusz](./12-glosariusz.md)
+17. [Contributing](./17-contributing.md)
+18. [Release Notes](./18-release-notes.md)
+19. [Glosariusz](./12-glosariusz.md)
 
 ## Status
 
