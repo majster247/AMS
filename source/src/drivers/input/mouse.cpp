@@ -3,6 +3,8 @@
 #include "graphics.h"
 #include "kernel.h"
 
+extern "C" void evdev_report_mouse(int32_t dx, int32_t dy, uint8_t buttons, uint8_t prev_buttons);
+
 
 // === ZMIENNE GLOBALNE ===
 volatile bool mouse_left_pressed = false;
@@ -175,14 +177,20 @@ extern "C" void mouse_handler(struct regs *r) {
             bool left = (mouse_byte[0] & 0x01);
             bool right = (mouse_byte[0] & 0x02);
             
-            // Reagujemy tylko jeśli nastąpił faktyczny ruch pikselowy lub kliknięcie
             if (left != mouse_left_pressed || right != mouse_right_pressed || move_x != 0 || move_y != 0) {
+                uint8_t prev_btn = 0;
+                if (mouse_left_pressed) prev_btn |= 0x1;
+                if (mouse_right_pressed) prev_btn |= 0x2;
+
                 mouse_left_pressed = left;
                 mouse_right_pressed = right;
                 mouse_moved = true; 
                 uint8_t buttons = 0;
                 if (left) buttons |= 0x1;
                 if (right) buttons |= 0x2;
+
+                evdev_report_mouse(raw_dx, -raw_dy, buttons, prev_btn);
+
                 uint8_t flags = 0;
                 if (move_x != 0 || move_y != 0) flags |= 0x1;
                 if (left || right) flags |= 0x2;

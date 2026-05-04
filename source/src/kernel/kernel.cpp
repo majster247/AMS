@@ -44,6 +44,8 @@ extern "C" uint64_t g_kernel_cr3 = 0;
 
 extern "C" void gdt_init();
 extern "C" void syscall_init();
+extern "C" void evdev_init();
+extern "C" void drm_init();
 extern "C" void switch_to_kernel_stack(void* new_stack, void (*func)());
 
 Desktop* main_desktop = nullptr;
@@ -634,6 +636,8 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
     write_serial_string("[BOOT] Mouse Initialized.\n");
     syscall_init();
     write_serial_string("[BOOT] Syscall Interface Initialized.\n");
+    evdev_init();
+    drm_init();
     enable_sse();
     write_serial_string("[BOOT] SSE Enabled.\n");
     

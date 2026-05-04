@@ -25,10 +25,14 @@ void refresh_screen();
 // AMS custom: pobierz zdarzenie myszy (0 = brak)
 #define SYS_AMS_GET_MOUSE_EVENT 453
 
-// Dodajmy też mmap, bo TCC go szuka w syscallach
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset);
 int munmap(void* addr, size_t length);
 int sys_exec(const char* path, int argc, char** argv);
+int ioctl(int fd, unsigned long request, void* arg);
+int shm_open(const char* name, int oflag, unsigned int mode);
+int shm_unlink(const char* name);
+int memfd_create(const char* name, unsigned int flags);
+int ftruncate(int fd, long length);
 
 #ifdef __cplusplus
 }

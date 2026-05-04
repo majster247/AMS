@@ -95,4 +95,11 @@
 #define SYS_ACCEPT4      288
 #define SYS_EPOLL_CREATE1 291
 #define SYS_STATX        332
+#define SYS_SETSOCKOPT   54
+#define SYS_GETSOCKOPT   55
+#define SYS_SENDTO       44
+#define SYS_RECVFROM     45
+#define SYS_SETSID       112
+#define SYS_SETPGID      109
+#define SYS_GETPGID      121
 #define SYS_AMS_GET_MOUSE_EVENT 453

@@ -6,6 +6,7 @@
 // WAŻNE: To łączy nas z plikiem src/lib/syscall.s
 // To ta funkcja wykonuje instrukcję CPU 'syscall'
 extern "C" uint64_t ams_syscall(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3, uint64_t p4, uint64_t p5);
+extern "C" uint64_t ams_syscall6(uint64_t sys_num, uint64_t p1, uint64_t p2, uint64_t p3, uint64_t p4, uint64_t p5, uint64_t p6);
 extern "C" {
 
 void exit(int code) {
@@ -52,10 +53,8 @@ int get_key() {
     return (int)ams_syscall(SYS_AMS_GET_KEY, 0, 0, 0, 0, 0);
 }
 
-// Mmap na razie symulujemy malloc'iem (dla user space to bez różnicy na tym etapie)
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) {
-    // 9 = SYS_MMAP (zgodnie z Linuxem)
-    return (void*)ams_syscall(9, (uint64_t)addr, length, prot, flags, (uint64_t)fd);
+    return (void*)ams_syscall6(9, (uint64_t)addr, length, prot, flags, (uint64_t)fd, (uint64_t)offset);
 }
 
 int munmap(void* addr, size_t length) {
@@ -64,7 +63,36 @@ int munmap(void* addr, size_t length) {
     return 0;
 }
 
-// Zmienne globalne dla errno (wymagane przez niektóre biblioteki C)
+int ioctl(int fd, unsigned long request, void* arg) {
+    return (int)ams_syscall(16, fd, request, (uint64_t)arg, 0, 0);
+}
+
+int shm_open(const char* name, int oflag, unsigned int mode) {
+    char path[256];
+    const char* prefix = "/dev/shm";
+    int i = 0;
+    while (prefix[i]) { path[i] = prefix[i]; i++; }
+    if (name[0] != '/') path[i++] = '/';
+    int j = 0;
+    while (name[j] && i < 254) { path[i++] = name[j++]; }
+    path[i] = '\0';
+    (void)mode;
+    return (int)ams_syscall(2, (uint64_t)path, oflag | 0x40 /* O_CREAT */, 0, 0, 0);
+}
+
+int shm_unlink(const char* name) {
+    (void)name;
+    return 0;
+}
+
+int memfd_create(const char* name, unsigned int flags) {
+    return (int)ams_syscall(319, (uint64_t)name, flags, 0, 0, 0);
+}
+
+int ftruncate(int fd, long length) {
+    return (int)ams_syscall(77, fd, (uint64_t)length, 0, 0, 0);
+}
+
 int errno_val = 0;
 int* __errno_location() { return &errno_val; }
 

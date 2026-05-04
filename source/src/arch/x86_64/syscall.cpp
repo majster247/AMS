@@ -168,6 +168,10 @@ static constexpr uint8_t FD_KIND_EPOLL = 4;
 static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
+static constexpr uint8_t FD_KIND_DRM = 8;
+static constexpr uint8_t FD_KIND_EVDEV_KB = 9;
+static constexpr uint8_t FD_KIND_EVDEV_MOUSE = 10;
+static constexpr uint8_t FD_KIND_SHM = 11;
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -263,6 +267,14 @@ static bool fd_is_readable(int fd) {
     if (fd_kind[fd] == FD_KIND_EVENTFD) {
         eventfd_state* es = (eventfd_state*)fd_aux[fd];
         return es && es->value > 0;
+    }
+    if (fd_kind[fd] == FD_KIND_EVDEV_KB) {
+        extern "C" bool evdev_kb_has_data();
+        return evdev_kb_has_data();
+    }
+    if (fd_kind[fd] == FD_KIND_EVDEV_MOUSE) {
+        extern "C" bool evdev_mouse_has_data();
+        return evdev_mouse_has_data();
     }
     return true;
 }
@@ -430,6 +442,20 @@ uint64_t sys_read(registers* regs) {
         return produced;
     }
 
+    if (fd_kind[fd] == FD_KIND_EVDEV_KB) {
+        extern "C" uint64_t evdev_read_kb(uint8_t* buf, uint64_t count);
+        uint64_t n = evdev_read_kb(buf, count);
+        if (n == 0) return (uint64_t)-11; // EAGAIN
+        return n;
+    }
+
+    if (fd_kind[fd] == FD_KIND_EVDEV_MOUSE) {
+        extern "C" uint64_t evdev_read_mouse(uint8_t* buf, uint64_t count);
+        uint64_t n = evdev_read_mouse(buf, count);
+        if (n == 0) return (uint64_t)-11; // EAGAIN
+        return n;
+    }
+
     size_t read_bytes = 0;
     if (f->tar_data) {
         uint64_t pos = fd_pos[fd];
@@ -576,6 +602,15 @@ uint64_t sys_open(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
+    bool pseudo_evdev_kb = (strcmp(path_buf, "/dev/input/event0") == 0);
+    bool pseudo_evdev_mouse = (strcmp(path_buf, "/dev/input/event1") == 0);
+    bool pseudo_shm = false;
+    {
+        const char* sp = path_buf;
+        if (sp[0]=='/' && sp[1]=='d' && sp[2]=='e' && sp[3]=='v' && sp[4]=='/' &&
+            sp[5]=='s' && sp[6]=='h' && sp[7]=='m' && sp[8]=='/') pseudo_shm = true;
+    }
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -583,11 +618,9 @@ uint64_t sys_open(registers* regs) {
         node = vfs_find(path_buf);
     }
     
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_drm || pseudo_evdev_kb || pseudo_evdev_mouse || pseudo_shm) {
         node = &g_root_dir;
-    } else if (!node && (flags & 0x40)) { // O_CREAT
-        // Normalizacja nazwy do "flat VFS basename":
-        // usuń wiodące '/' i './', a potem weź ostatni komponent.
+    } else if (!node && (flags & 0x40)) {
         const char* normalized = path_buf;
         while (*normalized == '/') normalized++;
         while (normalized[0] == '.' && normalized[1] == '/') normalized += 2;
@@ -606,7 +639,7 @@ uint64_t sys_open(registers* regs) {
 
     if (!node) return -2; // ENOENT
 
-    if (flags & 0x200) { // O_TRUNC
+    if (flags & 0x200) {
         node->size = 0;
         node->current_pos = 0;
     }
@@ -615,7 +648,13 @@ uint64_t sys_open(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_drm)          fd_kind[fd] = FD_KIND_DRM;
+    else if (pseudo_evdev_kb)    fd_kind[fd] = FD_KIND_EVDEV_KB;
+    else if (pseudo_evdev_mouse) fd_kind[fd] = FD_KIND_EVDEV_MOUSE;
+    else if (pseudo_shm)         fd_kind[fd] = FD_KIND_SHM;
+    else if (pseudo_dev_null)    fd_kind[fd] = FD_KIND_DEV_NULL;
+    else if (pseudo_dev_urandom) fd_kind[fd] = FD_KIND_DEV_URANDOM;
+    else                         fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -624,9 +663,6 @@ uint64_t sys_open(registers* regs) {
 }
 
 uint64_t sys_openat(registers* regs) {
-    // Linux x86_64 ABI:
-    // rdi = dirfd, rsi = pathname, rdx = flags, r10 = mode
-    // Na razie traktujemy VFS jako flat namespace, więc dirfd ignorujemy.
     (void)regs->rdi; // dirfd
     const char* path = (const char*)regs->rsi;
     int flags = (int)regs->rdx;
@@ -643,6 +679,15 @@ uint64_t sys_openat(registers* regs) {
     vfs_node* node = nullptr;
     bool pseudo_dev_null = (strcmp(path_buf, "/dev/null") == 0);
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
+    bool pseudo_drm = (strcmp(path_buf, "/dev/dri/card0") == 0);
+    bool pseudo_evdev_kb = (strcmp(path_buf, "/dev/input/event0") == 0);
+    bool pseudo_evdev_mouse = (strcmp(path_buf, "/dev/input/event1") == 0);
+    bool pseudo_shm = false;
+    {
+        const char* sp = path_buf;
+        if (sp[0]=='/' && sp[1]=='d' && sp[2]=='e' && sp[3]=='v' && sp[4]=='/' &&
+            sp[5]=='s' && sp[6]=='h' && sp[7]=='m' && sp[8]=='/') pseudo_shm = true;
+    }
     if ((path_buf[0] == '/' && path_buf[1] == '\0') ||
         (path_buf[0] == '.' && path_buf[1] == '\0')) {
         node = &g_root_dir;
@@ -650,9 +695,9 @@ uint64_t sys_openat(registers* regs) {
         node = vfs_find(path_buf);
     }
 
-    if (pseudo_dev_null || pseudo_dev_urandom) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_drm || pseudo_evdev_kb || pseudo_evdev_mouse || pseudo_shm) {
         node = &g_root_dir;
-    } else if (!node && (flags & 0x40)) { // O_CREAT
+    } else if (!node && (flags & 0x40)) {
         const char* normalized = path_buf;
         while (*normalized == '/') normalized++;
         while (normalized[0] == '.' && normalized[1] == '/') normalized += 2;
@@ -671,7 +716,7 @@ uint64_t sys_openat(registers* regs) {
 
     if (!node) return -2; // ENOENT
 
-    if (flags & 0x200) { // O_TRUNC
+    if (flags & 0x200) {
         node->size = 0;
         node->current_pos = 0;
     }
@@ -680,7 +725,13 @@ uint64_t sys_openat(registers* regs) {
     if (fd == -1) return -24; // EMFILE
 
     open_files[fd] = node;
-    fd_kind[fd] = pseudo_dev_null ? FD_KIND_DEV_NULL : (pseudo_dev_urandom ? FD_KIND_DEV_URANDOM : FD_KIND_FILE);
+    if (pseudo_drm)          fd_kind[fd] = FD_KIND_DRM;
+    else if (pseudo_evdev_kb)    fd_kind[fd] = FD_KIND_EVDEV_KB;
+    else if (pseudo_evdev_mouse) fd_kind[fd] = FD_KIND_EVDEV_MOUSE;
+    else if (pseudo_shm)         fd_kind[fd] = FD_KIND_SHM;
+    else if (pseudo_dev_null)    fd_kind[fd] = FD_KIND_DEV_NULL;
+    else if (pseudo_dev_urandom) fd_kind[fd] = FD_KIND_DEV_URANDOM;
+    else                         fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
     fd_aux[fd] = nullptr;
@@ -793,12 +844,26 @@ uint64_t sys_readlink(registers* regs) {
     return (uint64_t)n;
 }
 
+extern "C" int64_t drm_ioctl(uint32_t cmd, void* arg);
+extern "C" int64_t evdev_ioctl_kb(uint32_t cmd, void* arg);
+extern "C" int64_t evdev_ioctl_mouse(uint32_t cmd, void* arg);
+
 uint64_t sys_ioctl(registers* regs) {
     int fd = (int)regs->rdi;
-    (void)regs->rsi; // request
-    (void)regs->rdx; // argp
+    uint32_t request = (uint32_t)regs->rsi;
+    void* argp = (void*)regs->rdx;
     if (fd == 0 || fd == 1 || fd == 2) return (uint64_t)-25; // ENOTTY
     if (fd < 0 || fd >= 100 || !open_files[fd]) return (uint64_t)-9; // EBADF
+
+    if (fd_kind[fd] == FD_KIND_DRM) {
+        return (uint64_t)drm_ioctl(request, argp);
+    }
+    if (fd_kind[fd] == FD_KIND_EVDEV_KB) {
+        return (uint64_t)evdev_ioctl_kb(request, argp);
+    }
+    if (fd_kind[fd] == FD_KIND_EVDEV_MOUSE) {
+        return (uint64_t)evdev_ioctl_mouse(request, argp);
+    }
     return (uint64_t)-25; // ENOTTY
 }
 
@@ -1684,15 +1749,42 @@ uint64_t sys_wait4(registers* regs) {
 }
 
 uint64_t sys_mmap(registers* regs) {
+    uint64_t hint   = regs->rdi;
     uint64_t length = regs->rsi;
+    uint64_t prot   = regs->rdx;
+    uint64_t flags  = regs->r10;
+    int      fd     = (int)(int64_t)regs->r8;
+    uint64_t offset = regs->r9;
+    (void)hint; (void)prot;
+
     length = (length + 4095) & ~4095ULL;
     
-    static uint64_t mmap_ptr = 0x400000000; // Startujemy wysoko
+    static uint64_t mmap_ptr = 0x400000000;
     uint64_t addr = mmap_ptr;
+
+    bool is_file_backed = !(flags & 0x20) && fd >= 3 && fd < 100 && open_files[fd];
+
+    if (is_file_backed && open_files[fd]->tar_data) {
+        vfs_node* f = open_files[fd];
+        uint8_t* file_data = f->tar_data + offset;
+        uint64_t file_size = f->size > offset ? f->size - offset : 0;
+
+        for (uint64_t i = 0; i < length; i += 4096) {
+            void* phys = pmm_alloc_frame();
+            uint64_t phys_addr = (uint64_t)phys;
+            vmm_map_page_ex(current_task->cr3, addr + i, phys_addr, 0x7);
+            void* kva = (void*)(phys_addr + 0xFFFF800000000000ULL);
+            uint64_t chunk = (i < file_size) ? ((file_size - i) < 4096 ? (file_size - i) : 4096) : 0;
+            if (chunk > 0) k_memcpy(kva, file_data + i, chunk);
+            if (chunk < 4096) k_memset((uint8_t*)kva + chunk, 0, 4096 - chunk);
+        }
+        mmap_ptr += length;
+        return addr;
+    }
 
     for (uint64_t i = 0; i < length; i += 4096) {
         void* phys = pmm_alloc_frame();
-        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7); // USER | WRITABLE | PRESENT
+        vmm_map_page_ex(current_task->cr3, addr + i, (uint64_t)phys, 0x7);
         k_memset((void*)((uint64_t)phys + 0xFFFF800000000000ULL), 0, 4096);
     }
 
@@ -1937,6 +2029,12 @@ void init_syscall_table() {
         syscall_table[SYS_AMS_GET_KEY] = sys_ams_get_key;
         syscall_table[SYS_AMS_GET_FB_INFO] = sys_ams_get_fb_info;
         syscall_table[453] = sys_ams_get_mouse_event;
+
+        syscall_table[SYS_SETSOCKOPT] = [](registers* r) -> uint64_t { (void)r; return 0; };
+        syscall_table[SYS_GETSOCKOPT] = [](registers* r) -> uint64_t { (void)r; return 0; };
+        syscall_table[SYS_SETSID] = [](registers* r) -> uint64_t { (void)r; return task_pid_or_default(); };
+        syscall_table[SYS_SETPGID] = [](registers* r) -> uint64_t { (void)r; return 0; };
+        syscall_table[SYS_GETPGID] = [](registers* r) -> uint64_t { (void)r; return 0; };
 }
 
 // --- GŁÓWNY HANDLER ---

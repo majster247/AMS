@@ -223,9 +223,60 @@ wayland_sync_apps: wayland_stage
 	@echo "[WAYLAND] Syncing AMS Wayland app sources into stage..."
 	@bash tools/wayland_sync_apps.sh
 
+wayland_scanner: wayland_stage
+	@echo "[WAYLAND] Generating protocol headers from XML..."
+	@bash tools/wayland_scanner_stage.sh
+
 wayland_desktop_matrix: build/wayland_compositor.elf build/ams_wayland_shell.elf build/wayland_smoke.elf build/wayland_smoke_client.elf build/wayland_session.elf
 	@echo "[WAYLAND] Running desktop compatibility matrix..."
 	@bash tools/wayland_desktop_matrix.sh
+
+# Staging targets for wlroots dependencies
+wlroots_stage:
+	@echo "[WLROOTS] Cloning/updating wlroots and dependencies..."
+	@bash tools/wlroots_stage.sh
+
+pixman_stage:
+	@echo "[PIXMAN] AMS built-in pixman status..."
+	@bash tools/pixman_stage.sh
+
+libffi_stage:
+	@echo "[LIBFFI] AMS built-in libffi status..."
+	@bash tools/libffi_stage.sh
+
+mlibc_stage:
+	@echo "[MLIBC] Cloning/updating mlibc..."
+	@bash tools/mlibc_stage.sh
+
+# Combined staging target for all wlroots dependencies
+mesa_stage:
+	@echo "[MESA] Cloning/updating Mesa and libdrm..."
+	@bash tools/mesa_stage.sh
+
+linux_compat_stage: wayland_stage mesa_stage wlroots_stage wayland_scanner
+	@echo ""
+	@echo "==========================================="
+	@echo " AMS Linux Compatibility Layer - Staged"
+	@echo "==========================================="
+	@echo " Kernel subsystems (built into kernel.elf):"
+	@echo "   - DRM/KMS  (src/drivers/gpu/drm.cpp)"
+	@echo "   - evdev     (src/drivers/input/evdev.cpp)"
+	@echo "   - File-backed mmap (memfd + SHM)"
+	@echo " Userspace libraries:"
+	@echo "   - pixman    (src/lib/pixman/pixman.c)"
+	@echo "   - libffi    (src/lib/libffi/ffi.c)"
+	@echo "   - GBM       (src/lib/gbm.c)"
+	@echo "   - shm_open  (src/lib/ams_syscall.cpp)"
+	@echo " Headers:"
+	@echo "   - drm/drm.h, drm/drm_mode.h, drm/gbm.h"
+	@echo "   - linux/input.h"
+	@echo "   - pixman.h, ffi.h"
+	@echo " External (staged for cross-compilation):"
+	@echo "   - wlroots + xkbcommon + libseat"
+	@echo "   - wayland + wayland-protocols"
+	@echo "   - Mesa + libdrm"
+	@echo "   - Generated protocol headers"
+	@echo "==========================================="
 
 build/apps/wayland_smoke.o: | wayland_sync_apps
 	@mkdir -p build/apps
