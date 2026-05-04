@@ -350,6 +350,8 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	# Docelowa struktura systemu
 	sudo mkdir -p ./temp_mount/programs/doom
 	sudo mkdir -p ./temp_mount/programs/wayland
+	sudo mkdir -p ./temp_mount/programs/wayland/mesa
+	sudo mkdir -p ./temp_mount/programs/wayland/protocols
 	sudo mkdir -p ./temp_mount/tools/system
 	sudo mkdir -p ./temp_mount/tools/compiler/include
 	sudo mkdir -p ./temp_mount/tools/compiler/lib
@@ -359,9 +361,12 @@ $(DISK_IMAGE): build/tcc.elf build/doom.elf build/wayland_smoke.elf build/waylan
 	sudo mkdir -p ./temp_mount/tools/toolchain/bin
 	sudo mkdir -p ./temp_mount/tools/toolchain/lib
 	sudo mkdir -p ./temp_mount/tools/toolchain/meta
-	sudo mkdir -p ./temp_mount/programs/wayland/mesa
 	sudo mkdir -p ./temp_mount/tests/tcc
 	sudo mkdir -p ./temp_mount/tests/toolchain
+	sudo mkdir -p ./temp_mount/dev/dri
+	sudo mkdir -p ./temp_mount/dev/shm
+	sudo mkdir -p ./temp_mount/dev/input
+	sudo mkdir -p ./temp_mount/run/user/0
 
 	# Programy
 	sudo cp build/doom.elf ./temp_mount/programs/doom/doom.base.elf

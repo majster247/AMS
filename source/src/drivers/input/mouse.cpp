@@ -2,6 +2,7 @@
 #include "io.h"
 #include "graphics.h"
 #include "kernel.h"
+#include "evdev.h"
 
 
 // === ZMIENNE GLOBALNE ===
@@ -177,6 +178,17 @@ extern "C" void mouse_handler(struct regs *r) {
             
             // Reagujemy tylko jeśli nastąpił faktyczny ruch pikselowy lub kliknięcie
             if (left != mouse_left_pressed || right != mouse_right_pressed || move_x != 0 || move_y != 0) {
+                /* Push to evdev for libinput */
+                if (move_x != 0 || move_y != 0) {
+                    evdev_push_mouse_abs(mouse_x, mouse_y);
+                }
+                if (left != mouse_left_pressed) {
+                    evdev_push_mouse_button(BTN_LEFT, left ? 1 : 0);
+                }
+                if (right != mouse_right_pressed) {
+                    evdev_push_mouse_button(BTN_RIGHT, right ? 1 : 0);
+                }
+
                 mouse_left_pressed = left;
                 mouse_right_pressed = right;
                 mouse_moved = true; 

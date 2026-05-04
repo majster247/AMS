@@ -170,6 +170,7 @@ static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
 static constexpr uint8_t FD_KIND_DRM = 8;
 static constexpr uint8_t FD_KIND_SHM = 9;
+static constexpr uint8_t FD_KIND_EVDEV = 10;
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;
@@ -265,6 +266,12 @@ static bool fd_is_readable(int fd) {
     if (fd_kind[fd] == FD_KIND_EVENTFD) {
         eventfd_state* es = (eventfd_state*)fd_aux[fd];
         return es && es->value > 0;
+    }
+    if (fd_kind[fd] == FD_KIND_EVDEV) {
+        extern struct evdev_device g_evdev_devices[];
+        uint32_t idx = (uint32_t)(uint64_t)fd_aux[fd];
+        if (idx >= 4) return false;
+        return g_evdev_devices[idx].head != g_evdev_devices[idx].tail;
     }
     return true;
 }
@@ -404,6 +411,13 @@ uint64_t sys_read(registers* regs) {
             ps->count--;
         }
         return n;
+    }
+
+    if (fd_kind[fd] == FD_KIND_EVDEV) {
+        extern int evdev_read(uint32_t dev_idx, void* buf, uint32_t count);
+        uint32_t dev_idx = (uint32_t)(uint64_t)fd_aux[fd];
+        int rc = evdev_read(dev_idx, buf, (uint32_t)count);
+        return (uint64_t)rc;
     }
 
     if (fd_kind[fd] == FD_KIND_EVENTFD) {
@@ -580,6 +594,12 @@ uint64_t sys_open(registers* regs) {
     bool pseudo_dev_urandom = (strcmp(path_buf, "/dev/urandom") == 0);
     bool pseudo_dev_drm = (strcmp(path_buf, "/dev/dri/card0") == 0 ||
                            strcmp(path_buf, "dev/dri/card0") == 0);
+    bool pseudo_dev_evdev = false;
+    uint32_t evdev_idx = 0;
+    if (strcmp(path_buf, "/dev/input/event0") == 0) { pseudo_dev_evdev = true; evdev_idx = 0; }
+    else if (strcmp(path_buf, "/dev/input/event1") == 0) { pseudo_dev_evdev = true; evdev_idx = 1; }
+    else if (strcmp(path_buf, "/dev/input/event2") == 0) { pseudo_dev_evdev = true; evdev_idx = 2; }
+    else if (strcmp(path_buf, "/dev/input/event3") == 0) { pseudo_dev_evdev = true; evdev_idx = 3; }
     bool pseudo_dev_shm = false;
     {
         const char* shm_prefix = "/dev/shm/";
@@ -596,7 +616,7 @@ uint64_t sys_open(registers* regs) {
         node = vfs_find(path_buf);
     }
     
-    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_dev_drm || pseudo_dev_shm) {
+    if (pseudo_dev_null || pseudo_dev_urandom || pseudo_dev_drm || pseudo_dev_shm || pseudo_dev_evdev) {
         node = &g_root_dir;
     } else if (!node && (flags & 0x40)) { // O_CREAT
         // Normalizacja nazwy do "flat VFS basename":
@@ -630,6 +650,10 @@ uint64_t sys_open(registers* regs) {
     open_files[fd] = node;
     if (pseudo_dev_drm)
         fd_kind[fd] = FD_KIND_DRM;
+    else if (pseudo_dev_evdev) {
+        fd_kind[fd] = FD_KIND_EVDEV;
+        fd_aux[fd] = (void*)(uint64_t)evdev_idx;
+    }
     else if (pseudo_dev_shm)
         fd_kind[fd] = FD_KIND_SHM;
     else if (pseudo_dev_null)
@@ -640,11 +664,18 @@ uint64_t sys_open(registers* regs) {
         fd_kind[fd] = FD_KIND_FILE;
     fd_flags[fd] = 0;
     fd_status[fd] = (uint32_t)flags;
-    fd_aux[fd] = nullptr;
+    if (!pseudo_dev_evdev) fd_aux[fd] = nullptr;
     fd_pos[fd] = 0;
 
     if (pseudo_dev_drm) {
         write_serial_string("[SYSCALL] Opened DRM device fd=");
+        write_serial_dec(fd);
+        write_serial_string("\n");
+    }
+    if (pseudo_dev_evdev) {
+        write_serial_string("[SYSCALL] Opened evdev device event");
+        write_serial_dec(evdev_idx);
+        write_serial_string(" fd=");
         write_serial_dec(fd);
         write_serial_string("\n");
     }
@@ -833,6 +864,13 @@ uint64_t sys_ioctl(registers* regs) {
     if (fd_kind[fd] == FD_KIND_DRM) {
         extern int64_t drm_ioctl(int fd, uint64_t request, uint64_t arg);
         return (uint64_t)drm_ioctl(fd, request, argp);
+    }
+
+    /* Route evdev ioctls */
+    if (fd_kind[fd] == FD_KIND_EVDEV) {
+        extern int evdev_ioctl(uint32_t dev_idx, uint64_t request, uint64_t arg);
+        uint32_t dev_idx = (uint32_t)(uint64_t)fd_aux[fd];
+        return (uint64_t)evdev_ioctl(dev_idx, request, argp);
     }
 
     /* TIOCGWINSZ for terminal size queries */

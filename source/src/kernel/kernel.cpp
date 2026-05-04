@@ -659,6 +659,13 @@ extern "C" void kmain(uint64_t multiboot_info_address) {
         write_serial_string("[BOOT] DRM/KMS subsystem initialized (GEM/TTM ready).\n");
     }
 
+    /* Initialize evdev input layer for libinput */
+    {
+        extern void evdev_init(void);
+        evdev_init();
+        write_serial_string("[BOOT] evdev input layer initialized (libinput ready).\n");
+    }
+
     main_desktop = new Desktop();
     main_desktop->Init();
     main_desktop->AddWindow(new TerminalWindow(100, 100));

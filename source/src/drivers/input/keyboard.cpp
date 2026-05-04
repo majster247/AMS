@@ -2,6 +2,7 @@
 #include "io.h"
 #include "task.h"
 #include "gui.h"
+#include "evdev.h"
 
 
 volatile bool key_ctrl_pressed = false;
@@ -49,23 +50,22 @@ extern "C" void keyboard_handler(registers* r) {
         if (scancode == 0x1D) key_ctrl_pressed = true;
         if (scancode == 0x2A) key_shift_pressed = true;
 
+        /* Push to evdev for libinput */
+        evdev_push_key(scancode, 1);
+
         char c = my_scancode_table[scancode];
         
-        // Obsługa Shift (wielkie litery) - PROSTA WERSJA
         if (key_shift_pressed && c >= 'a' && c <= 'z') {
             c -= 32;
         }
 
         if (c != 0) {
-            // 1. Zapisz do bufora (dla syscalli/konsoli tekstowej)
             keyboard_queue[k_head] = c;
             k_head = (k_head + 1) % 256;
-            enqueue_key_event((int16_t)c); // key down
+            enqueue_key_event((int16_t)c);
             
-            // 2. Debug na serial
             write_serial_char(c);
 
-            // 3. Przekazuj klawiaturę do GUI tylko gdy działa kernel desktop.
             if (main_desktop && current_task == kernel_task) {
                 main_desktop->HandleKeyboard(c);
             }
@@ -76,9 +76,12 @@ extern "C" void keyboard_handler(registers* r) {
         if (release_code == 0x1D) key_ctrl_pressed = false;
         if (release_code == 0x2A) key_shift_pressed = false;
 
+        /* Push key release to evdev */
+        evdev_push_key(release_code, 0);
+
         char c = my_scancode_table[release_code];
         if (key_shift_pressed && c >= 'a' && c <= 'z') c -= 32;
-        if (c != 0) enqueue_key_event((int16_t)(-((int)c))); // key up
+        if (c != 0) enqueue_key_event((int16_t)(-((int)c)));
     }
 }
 
