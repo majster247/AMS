@@ -70,9 +70,9 @@ int main(int argc, char** argv) {
 
     if (streq(argv[1], "start-wayland")) {
         char* argv2[2];
-        argv2[0] = (char*)"/programs/wayland/ams-wl-compositor";
+        argv2[0] = (char*)"/programs/wayland/wlroots-compositor";
         argv2[1] = 0;
-        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/ams-wl-compositor", 1, (uint64_t)argv2, 0, 0);
+        int rc = (int)ams_syscall(10, (uint64_t)"/programs/wayland/wlroots-compositor", 1, (uint64_t)argv2, 0, 0);
         if (rc != 0) {
             puts1("jobctl: start-wayland failed");
             return 6;

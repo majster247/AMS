@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <poll.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +32,19 @@ void refresh_screen();
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset);
 int munmap(void* addr, size_t length);
 int sys_exec(const char* path, int argc, char** argv);
+int poll(struct pollfd* fds, unsigned long nfds, int timeout);
+int epoll_create1(int flags);
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event);
+int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout);
+int socket(int domain, int type, int protocol);
+int connect(int sockfd, const struct sockaddr* addr, unsigned int addrlen);
+int bind(int sockfd, const struct sockaddr* addr, unsigned int addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr* addr, unsigned int* addrlen);
+int shutdown(int sockfd, int how);
+int shm_open(const char* name, int oflag, unsigned int mode);
+int shm_unlink(const char* name);
+int eventfd(unsigned int initval, int flags);
 
 #ifdef __cplusplus
 }

@@ -13,7 +13,7 @@ AMS-OS buduje zestaw aplikacji demonstracyjnych i systemowych:
 - `jobctl.elf` - kontrola jobów/procesów,
 - `apt.elf` - prototyp menedżera pakietów,
 - `doom.elf` - aplikacja wymagająca szerszego runtime,
-- `wayland_*` - smoke testy i komponenty sesji Wayland.
+- `wayland_*` - smoke testy i komponenty sesji Wayland (w tym `wlroots-compositor` jako nowy punkt startowy).
 
 ## 2. Rozmieszczenie w obrazie dysku
 
@@ -37,13 +37,18 @@ Doom to istotny benchmark integracyjny:
 - testuje I/O, argumenty i wykonanie aplikacji większej niż proste testy C,
 - wykorzystuje bootstrap oraz WAD (`freedoom1.wad`) dostarczane w obrazie.
 
-## 5. Wayland jako nowy tor GUI
+## 5. Wayland/wlroots jako nowy tor GUI
 
 Stack Wayland w AMS służy do przejścia z klasycznego desktopu na bardziej nowoczesny model sesji:
 
-- compositor uruchamiany jako domyślna sesja,
+- compositor uruchamiany jako domyślna sesja (`/wlroots-compositor`),
 - smoke testy klient-serwer,
-- wsparcie stage dla artefaktów Mesa/Wayland.
+- wsparcie stage dla artefaktów Mesa/Wayland/wlroots/libinput/pixman/cairo/libffi.
+
+Do stagingu pełnego stosu służą cele:
+
+- `make graphics_stage` - klonowanie i synchronizacja źródeł Wayland, Mesa/libdrm, wlroots, libinput, pixman, cairo, mlibc oraz libffi;
+- `make wayland_desktop_matrix` - szybka walidacja obecności artefaktów userspace wymaganych przez sesję Wayland.
 
 ## 6. Rekomendacja produktowa
 

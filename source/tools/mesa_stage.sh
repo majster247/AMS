@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPS_DIR="${ROOT_DIR}/external/mesa-stack"
 MESA_DIR="${DEPS_DIR}/mesa"
 LIBDRM_DIR="${DEPS_DIR}/libdrm"
-MESA_BUILD_DIR="${DEPS_DIR}/build-mesa-soft"
+MESA_BUILD_DIR="${DEPS_DIR}/build-mesa-egl-gbm"
 
 mkdir -p "${DEPS_DIR}"
 
@@ -26,12 +26,17 @@ clone_or_update "https://github.com/mesa3d/mesa.git" "${MESA_DIR}"
 echo "[mesa-stage] repositories ready:"
 echo "  - ${LIBDRM_DIR}"
 echo "  - ${MESA_DIR}"
-echo "[mesa-stage] configure software-first profile (swrast/wayland)..."
+echo "[mesa-stage] configure EGL+GBM profile (swrast/wayland)..."
 
 if command -v meson >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1; then
   rm -rf "${MESA_BUILD_DIR}"
   meson setup "${MESA_BUILD_DIR}" "${MESA_DIR}" \
-    -Dplatforms=wayland \
+    -Dplatforms=wayland,drm,surfaceless \
+    -Degl=enabled \
+    -Dgbm=enabled \
+    -Dglx=disabled \
+    -Dgles1=disabled \
+    -Dgles2=enabled \
     -Dgallium-drivers=swrast \
     -Dvulkan-drivers=[] \
     -Ddri-drivers=[] \

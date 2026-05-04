@@ -345,9 +345,9 @@ void Desktop::Update(int mx, int my, bool left_click) {
                     }
                     case 6: {
                         char* wl_argv[2];
-                        wl_argv[0] = (char*)"/programs/wayland/ams-wl-compositor";
+                        wl_argv[0] = (char*)"/programs/wayland/wlroots-compositor";
                         wl_argv[1] = nullptr;
-                        launch_user_app("/programs/wayland/ams-wl-compositor", 1, wl_argv);
+                        launch_user_app("/programs/wayland/wlroots-compositor", 1, wl_argv);
                         break;
                     }
                     case 7: {
