@@ -170,7 +170,6 @@ static constexpr uint8_t FD_KIND_EVENTFD = 5;
 static constexpr uint8_t FD_KIND_DEV_NULL = 6;
 static constexpr uint8_t FD_KIND_DEV_URANDOM = 7;
 static constexpr uint8_t FD_KIND_DRM = 8;
-static constexpr uint8_t FD_KIND_DRM = 8;
 
 static int path_basename(const char* in, char* out, size_t out_sz) {
     if (!in || !out || out_sz < 2) return -22;

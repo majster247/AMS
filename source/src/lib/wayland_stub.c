@@ -1,4 +1,4 @@
-#include "wayland-server-core.h"
+#include "wayland/wayland-server-core.h"
 
 #include <stdarg.h>
 
